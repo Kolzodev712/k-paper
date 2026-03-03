@@ -1,0 +1,14 @@
+[package]
+name = "paper-exchange-server"
+version = "0.1.0"
+edition = "2021"
+description = "Server wrapping paper-exchange-core: WebSocket (or gRPC), sessions, wire format."
+license = "UNLICENSED"
+
+[[bin]]
+name = "paper-exchange-server"
+path = "src/main.rs"
+
+[dependencies]
+paper-exchange-core = { path = "../paper-exchange-core" }
+# TODO: add when implementing Phase 2: tokio, tokio-tungstenite or axum, serde_json, tracing

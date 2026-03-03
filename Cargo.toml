@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = [
+    ".",
+    "crates/paper-exchange-core",
+    "crates/paper-exchange-server",
+]
+
+[package]
+name = "k-paper"
+version = "0.1.0"
+edition = "2021"
+description = "Standalone paper exchange — main system binary."
+license = "UNLICENSED"
+
+[[bin]]
+name = "k-paper"
+path = "src/main.rs"
+
+[dependencies]
+paper-exchange-server = { path = "crates/paper-exchange-server" }
