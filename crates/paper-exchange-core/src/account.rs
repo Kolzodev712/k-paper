@@ -89,6 +89,10 @@ impl Account {
         self.positions.get(instrument_id)
     }
 
+    pub fn get_all_positions(&self) -> Vec<Position> {
+        self.positions.values().cloned().collect()
+    }
+
     pub fn update_position(&mut self, position: Position) {
         if position.quantity == Decimal::ZERO {
             self.positions.remove(&position.instrument_id);

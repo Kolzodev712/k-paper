@@ -20,17 +20,31 @@ pub enum ClientMessage {
         quantity: Option<String>,
         limit_price: Option<String>,
     },
+    /// Request current balances and positions (same as sent on connect). Server responds with balance/position messages.
+    GetAccountSnapshot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
+    /// Sent once on connect so the client can verify the connection and server version.
+    Connected {},
     Orderbook(OrderbookSnapshot),
     PublicTrade(PublicTrade),
     Execution(Execution),
     Balance(Balance),
     Position(Position),
-    Error { message: String },
+    #[serde(rename = "CancelAck")]
+    CancelAck {
+        order_id: String,
+    },
+    #[serde(rename = "AmendAck")]
+    AmendAck {
+        order_id: String,
+    },
+    Error {
+        message: String,
+    },
 }
 
 /// Internal event for broadcast (wraps core stream events).

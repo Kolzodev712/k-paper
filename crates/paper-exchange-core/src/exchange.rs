@@ -9,15 +9,15 @@ use crate::orderbook::Orderbook;
 use crate::types::*;
 use chrono::Utc;
 use rust_decimal::Decimal;
-use std::sync::mpsc;
+use tokio::sync::mpsc;
 
 pub struct PaperExchange {
     config: Config,
     orderbook: Orderbook,
     order_manager: OrderManager,
     account: Account,
-    market_tx: mpsc::Sender<StreamEvent<MarketDataEvent>>,
-    private_tx: mpsc::Sender<StreamEvent<PrivateEvent>>,
+    market_tx: mpsc::UnboundedSender<StreamEvent<MarketDataEvent>>,
+    private_tx: mpsc::UnboundedSender<StreamEvent<PrivateEvent>>,
     market_sequence: u64,
     private_sequence: u64,
 }
@@ -27,11 +27,11 @@ impl PaperExchange {
         config: Config,
     ) -> (
         Self,
-        mpsc::Receiver<StreamEvent<MarketDataEvent>>,
-        mpsc::Receiver<StreamEvent<PrivateEvent>>,
+        mpsc::UnboundedReceiver<StreamEvent<MarketDataEvent>>,
+        mpsc::UnboundedReceiver<StreamEvent<PrivateEvent>>,
     ) {
-        let (market_tx, market_rx) = mpsc::channel();
-        let (private_tx, private_rx) = mpsc::channel();
+        let (market_tx, market_rx) = mpsc::unbounded_channel();
+        let (private_tx, private_rx) = mpsc::unbounded_channel();
         // orderbook entries added below
         let account = Account::new(&config.initial_balances);
         let order_manager = OrderManager::new(config.clone());
@@ -194,6 +194,24 @@ impl PaperExchange {
             .get_order(order.order_id)
             .cloned()
             .unwrap_or(order))
+    }
+
+    /// Return current balances and positions without sending to the stream (for direct reply to a connection).
+    pub fn get_snapshot_data(&self) -> (Vec<Balance>, Vec<Position>) {
+        (
+            self.account.get_all_balances(),
+            self.account.get_all_positions(),
+        )
+    }
+
+    /// Emit current balances and positions to the private stream (e.g. for new clients).
+    pub fn emit_account_snapshot(&mut self) {
+        for bal in self.account.get_all_balances() {
+            self.send_private(PrivateEvent::Balance(bal));
+        }
+        for pos in self.account.get_all_positions() {
+            self.send_private(PrivateEvent::Position(pos));
+        }
     }
 
     pub fn cancel_order(&mut self, req: CancelRequest) -> Result<Order, ExchangeError> {

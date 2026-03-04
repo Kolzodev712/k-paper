@@ -81,7 +81,7 @@ fn orderbook_apply_snapshot() {
 #[test]
 fn place_and_fill_limit_order() {
     let config = test_config();
-    let (mut exchange, _market_rx, private_rx) = PaperExchange::new(config);
+    let (mut exchange, _market_rx, mut private_rx) = PaperExchange::new(config);
 
     exchange
         .inject_orderbook(OrderbookSnapshot {

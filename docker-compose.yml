@@ -7,6 +7,7 @@ version: "3.8"
 services:
   paper-exchange:
     build: .
+    # Publish container 19999 to host 19999 so the runner on the host can use ws://127.0.0.1:19999/ws
     ports:
       - "19999:19999"
     environment:

@@ -19,8 +19,8 @@ ws://<host>:<port>/ws
 
 - **Transport:** WebSocket, text frames.
 - **Payload:** One JSON object per message. The `type` field identifies the message kind (client → server and server → client).
-- **Client → Server:** Commands: `place_order`, `cancel_order`, `cancel_by_client_order_id`, `amend_order`.
-- **Server → Client:** Events: `execution`, `balance`, `position`, `error`.
+- **Client → Server:** Commands: `get_account_snapshot`, `place_order`, `cancel_order`, `cancel_by_client_order_id`, `amend_order`.
+- **Server → Client:** Events: `execution`, `balance`, `position`, `CancelAck`, `AmendAck`, `error`. The server also pushes an account snapshot (balance/position) automatically when you connect; you can request it again anytime with `get_account_snapshot`. For place/cancel/amend, the server sends the corresponding ack (`execution`, `CancelAck`, `AmendAck`) on the same WebSocket that sent the request.
 
 **Conventions:**
 
@@ -36,7 +36,19 @@ ws://<host>:<port>/ws
 
 ## Client → Server: commands
 
-### 1. Place order
+### 1. Get account snapshot
+
+**`type`: `"get_account_snapshot"`**
+
+Request current balances and positions. The server responds with one `balance` message per asset and one `position` message per instrument (same as the snapshot sent automatically on connect). Use this if you did not receive the initial snapshot (e.g. timeout) or after reconnect.
+
+No payload. Example:
+
+```json
+{"type": "get_account_snapshot"}
+```
+
+### 2. Place order
 
 **`type`: `"place_order"`**
 
@@ -89,7 +101,7 @@ ws://<host>:<port>/ws
 
 ---
 
-### 2. Cancel by order ID
+### 3. Cancel by order ID
 
 **`type`: `"cancel_order"`**
 
@@ -106,7 +118,7 @@ ws://<host>:<port>/ws
 
 ---
 
-### 3. Cancel by client order ID
+### 4. Cancel by client order ID
 
 **`type`: `"cancel_by_client_order_id"`**
 
@@ -123,7 +135,7 @@ ws://<host>:<port>/ws
 
 ---
 
-### 4. Amend order
+### 5. Amend order
 
 **`type`: `"amend_order"`**
 
@@ -237,7 +249,39 @@ Position in an instrument.
 
 ---
 
-### 4. Error
+### 4. CancelAck
+
+**`type`: `"CancelAck"`**
+
+Sent on the same connection after a successful cancel (by order_id or client_order_id). Lets you confirm the cancel without relying on broadcast ordering.
+
+| Field      | Type   | Description |
+|------------|--------|-------------|
+| `order_id` | string | Order ID (UUID) that was canceled |
+
+```json
+{ "type": "CancelAck", "order_id": "550e8400-e29b-41d4-a716-446655440000" }
+```
+
+---
+
+### 5. AmendAck
+
+**`type`: `"AmendAck"`**
+
+Sent on the same connection after a successful amend. Lets you confirm the amend without relying on broadcast ordering.
+
+| Field      | Type   | Description |
+|------------|--------|-------------|
+| `order_id` | string | Order ID (UUID) that was amended |
+
+```json
+{ "type": "AmendAck", "order_id": "550e8400-e29b-41d4-a716-446655440000" }
+```
+
+---
+
+### 6. Error
 
 **`type`: `"error"`**
 

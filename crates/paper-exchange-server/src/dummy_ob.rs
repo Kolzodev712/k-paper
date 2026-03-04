@@ -1,4 +1,4 @@
-//! Dummy orderbook generator: produces a stream of synthetic orderbook snapshots (random walk)
+//! Dummy orderbook generator: async task that produces synthetic orderbook snapshots (random walk)
 //! and public trades, injecting them into the exchange so connected trading bots receive
 //! fake market data on the same stream.
 
@@ -7,9 +7,7 @@ use paper_exchange_core::types::*;
 use rand::{Rng, SeedableRng};
 use rust_decimal::Decimal;
 use std::str::FromStr;
-use std::sync::mpsc::Sender;
-use std::thread;
-use std::time::Duration;
+use tokio::sync::mpsc;
 
 fn decimal(s: &str) -> Decimal {
     Decimal::from_str(s).unwrap_or(Decimal::ZERO)
@@ -63,14 +61,13 @@ impl Default for DummyObConfig {
     }
 }
 
-/// Run the dummy OB generator in a dedicated thread. Sends `Command::InjectOrderbook`
-/// each tick and, with configurable probability, `Command::InjectTrade`. Bots connected
-/// to the server's WebSocket receive both on the same market data stream.
-pub fn spawn_dummy_ob(config: DummyObConfig, command_tx: Sender<Command>) {
-    thread::spawn(move || run_dummy_ob(config, command_tx));
+/// Spawn the dummy OB generator as a tokio task. Sends `Command::InjectOrderbook`
+/// each tick and, with configurable probability, `Command::InjectTrade`.
+pub fn spawn_dummy_ob(config: DummyObConfig, command_tx: mpsc::UnboundedSender<Command>) {
+    tokio::spawn(async move { run_dummy_ob(config, command_tx).await });
 }
 
-fn run_dummy_ob(config: DummyObConfig, command_tx: Sender<Command>) {
+async fn run_dummy_ob(config: DummyObConfig, command_tx: mpsc::UnboundedSender<Command>) {
     let mut rng = config
         .seed
         .map(rand::rngs::StdRng::seed_from_u64)
@@ -78,9 +75,13 @@ fn run_dummy_ob(config: DummyObConfig, command_tx: Sender<Command>) {
 
     let mut mid = config.initial_mid;
     let mut sequence: u64 = 0;
-    let interval = Duration::from_millis(config.interval_ms);
+    let mut interval =
+        tokio::time::interval(tokio::time::Duration::from_millis(config.interval_ms));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
+        interval.tick().await;
+
         mid += (rng.gen::<f64>() - 0.5) * 2.0 * config.step;
         mid = mid.max(100.0);
 
@@ -151,8 +152,6 @@ fn run_dummy_ob(config: DummyObConfig, command_tx: Sender<Command>) {
                 break;
             }
         }
-
-        thread::sleep(interval);
     }
     tracing::debug!("dummy OB generator stopped");
 }

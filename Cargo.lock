@@ -930,6 +930,7 @@ dependencies = [
  "rust_decimal",
  "serde",
  "thiserror",
+ "tokio",
  "uuid",
 ]
 

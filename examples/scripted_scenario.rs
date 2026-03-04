@@ -62,7 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         fill_model: FillModelConfig::default(),
     };
 
-    let (mut exchange, market_rx, private_rx) = PaperExchange::new(config);
+    let (mut exchange, mut market_rx, mut private_rx) = PaperExchange::new(config);
 
     let path = std::env::args()
         .nth(1)
