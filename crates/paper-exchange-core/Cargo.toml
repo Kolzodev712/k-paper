@@ -6,7 +6,7 @@ description = "Core logic for the standalone paper exchange: orderbook, matching
 license = "UNLICENSED"
 
 [dependencies]
-rust_decimal = "1.33"
+rust_decimal = { version = "1.33", features = ["maths"] }
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "1.0"

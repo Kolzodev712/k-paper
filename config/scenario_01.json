@@ -1,0 +1,23 @@
+{
+  "events": [
+    {
+      "t": "orderbook",
+      "instrument_id": "BTC-USDT",
+      "bids": [["50000", "1.5"], ["49900", "2"]],
+      "asks": [["50100", "0.8"], ["50200", "1"]]
+    },
+    {
+      "t": "place_order",
+      "instrument_id": "BTC-USDT",
+      "side": "Buy",
+      "quantity": "0.2",
+      "limit_price": "50100"
+    },
+    {
+      "t": "orderbook",
+      "instrument_id": "BTC-USDT",
+      "bids": [["50050", "1"]],
+      "asks": [["50080", "0.5"]]
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+# Example instruments for paper exchange (optional; scripted_scenario builds config in code)
+instruments:
+  - id: BTC-USDT
+    symbol: BTC-USDT
+    base_asset: BTC
+    quote_asset: USDT
+    tick_size: 0.01
+    lot_size: 0.001
+    min_notional: 10
+initial_balances:
+  - asset: USDT
+    amount: 1000000
+  - asset: BTC
+    amount: 100
