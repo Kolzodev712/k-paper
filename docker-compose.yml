@@ -1,0 +1,23 @@
+# If you see KeyError: 'ContainerConfig' with docker-compose v1, run:
+#   docker-compose down && docker-compose up --build
+# Or use Docker Compose V2: docker compose up --build
+
+version: "3.8"
+
+services:
+  paper-exchange:
+    build: .
+    ports:
+      - "19999:19999"
+    environment:
+      PAPER_EXCHANGE_HOST: "0.0.0.0"
+      PAPER_EXCHANGE_PORT: "19999"
+      PAPER_EXCHANGE_DUMMY_OB: "1"
+    restart: unless-stopped
+    # deploy.resources only apply in Swarm; if you see exit 137 (OOM), increase Docker memory
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M

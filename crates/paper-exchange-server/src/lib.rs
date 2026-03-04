@@ -41,7 +41,10 @@ pub fn run() {
         .ok()
         .and_then(|p| p.parse::<u16>().ok())
         .unwrap_or(0);
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let host = std::env::var("PAPER_EXCHANGE_HOST").unwrap_or_else(|_| "127.0.0.1".into());
+    let addr: std::net::SocketAddr = format!("{}:{}", host, port)
+        .parse()
+        .expect("PAPER_EXCHANGE_HOST:PAPER_EXCHANGE_PORT must be valid");
     tracing::info!("paper exchange WebSocket on ws://{}/ws", addr);
 
     tokio::runtime::Builder::new_current_thread()

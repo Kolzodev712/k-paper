@@ -1,0 +1,10 @@
+target
+.git
+.gitignore
+.cursor
+*.md
+docs
+proposals
+justfile
+config
+examples
