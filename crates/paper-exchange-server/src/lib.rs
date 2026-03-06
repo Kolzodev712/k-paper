@@ -14,9 +14,9 @@ use tracing_subscriber::EnvFilter;
 
 /// Main entry point: start WebSocket server and core/dummy tasks on tokio runtime.
 pub fn run() {
-    tracing_subscriber::fmt()
+    let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
-        .init();
+        .try_init();
 
     let (user_command_tx, user_command_rx) = mpsc::unbounded_channel();
     let (dummy_command_tx, dummy_command_rx) = mpsc::unbounded_channel();
@@ -54,6 +54,8 @@ pub fn run() {
             });
             let app = axum::Router::new()
                 .route("/ws", axum::routing::get(ws_handler_with_state))
+                .route("/ws/market", axum::routing::get(ws_handler_market))
+                .route("/ws/trade", axum::routing::get(ws_handler_trade))
                 .with_state(state);
 
             let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");
@@ -69,5 +71,19 @@ async fn ws_handler_with_state(
     axum::extract::State(state): axum::extract::State<Arc<transport::AppState>>,
     ws: axum::extract::ws::WebSocketUpgrade,
 ) -> axum::response::Response {
-    ws.on_upgrade(move |socket| transport::handle_socket(socket, state))
+    ws.on_upgrade(move |socket| transport::handle_socket(socket, state, true))
+}
+
+async fn ws_handler_market(
+    axum::extract::State(state): axum::extract::State<Arc<transport::AppState>>,
+    ws: axum::extract::ws::WebSocketUpgrade,
+) -> axum::response::Response {
+    ws.on_upgrade(move |socket| transport::handle_socket(socket, state, false))
+}
+
+async fn ws_handler_trade(
+    axum::extract::State(state): axum::extract::State<Arc<transport::AppState>>,
+    ws: axum::extract::ws::WebSocketUpgrade,
+) -> axum::response::Response {
+    ws.on_upgrade(move |socket| transport::handle_socket(socket, state, true))
 }

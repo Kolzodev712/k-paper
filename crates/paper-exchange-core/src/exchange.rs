@@ -219,6 +219,12 @@ impl PaperExchange {
         self.order_manager.cancel_order(req, &mut self.account, now)
     }
 
+    /// Cancel all open orders (New/PartiallyFilled). Returns the orders that were canceled.
+    pub fn cancel_all_orders(&mut self) -> Vec<Order> {
+        let now = self.now();
+        self.order_manager.cancel_all_orders(&mut self.account, now)
+    }
+
     pub fn amend_order(&mut self, req: AmendRequest) -> Result<Order, ExchangeError> {
         let now = self.now();
         self.order_manager.amend_order(req, &mut self.account, now)

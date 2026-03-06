@@ -2,16 +2,18 @@
 
 WebSocket API for **orderbooks** and **public trades**. Use this when integrating a market data engine (e.g. book builder, trade tape, analytics). Read-only from the client: you connect and receive streamed data; no commands are sent for market data.
 
+**See [CLIENT-INSTRUCTIONS.md](CLIENT-INSTRUCTIONS.md) for endpoint overview and when to use `/ws` vs `/ws/market` vs `/ws/trade`.**
+
 ---
 
 ## Endpoint
 
 ```
-ws://<host>:<port>/ws
+ws://<host>:<port>/ws/market
 ```
 
 - **Port:** Set `PAPER_EXCHANGE_PORT` when starting the server (e.g. `19999`). Default `0` = OS-assigned.
-- **Path:** `/ws` only. No query parameters or auth.
+- **Path:** Use **`/ws/market`** for market data only (orderbook + public_trade; no snapshot, no commands). Alternatively `/ws` also delivers market data but includes trading messages; prefer `/ws/market` for read-only feeds.
 
 To get a continuous stream of synthetic data, start the server with:
 
@@ -44,7 +46,7 @@ Without `PAPER_EXCHANGE_DUMMY_OB=1`, orderbook and public trade messages are onl
 
 ## Server → Client: message types
 
-Your client will only see these `type` values for a **market-data-only** integration (you may also receive execution/balance/position/error on the same connection; you can ignore them or hand them off to the execution integration).
+On **`/ws/market`** your client will only see these `type` values (no execution, balance, position, or trading acks).
 
 ### 1. Orderbook snapshot
 
@@ -114,7 +116,7 @@ One trade that occurred (synthetic or from matching).
 
 ## Integration checklist
 
-1. Open WebSocket to `ws://<host>:<port>/ws`.
+1. Open WebSocket to `ws://<host>:<port>/ws/market`.
 2. For each received text message, parse JSON and read `type`.
 3. If `type === "orderbook"`: update your orderbook state for `instrument_id` (full replace). Optionally use `sequence` to ignore out-of-order or duplicate snapshots.
 4. If `type === "public_trade"`: append to your trade tape or feed for that instrument.

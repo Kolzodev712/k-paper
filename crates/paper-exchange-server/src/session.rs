@@ -126,35 +126,59 @@ fn run_user_command(
     cmd: Command,
 ) {
     match cmd {
-        Command::PlaceOrder(req, mut reply_tx) => {
-            if let Err(e) = exchange.place_order(req) {
+        Command::PlaceOrder(req, mut reply_tx) => match exchange.place_order(req) {
+            Err(e) => {
                 tracing::warn!("place_order error: {:?}", e);
-            } else {
+                if let Some(tx) = reply_tx.take() {
+                    let _ = tx.send(Err(e.to_string()));
+                }
+            }
+            Ok(_) => {
                 while let Ok(ev) = private_rx.try_recv() {
                     if let Some(tx) = reply_tx.take() {
                         if let PrivateEvent::Execution(exec) = ev.payload.clone() {
-                            let _ = tx.send(exec);
+                            let _ = tx.send(Ok(exec));
                         }
                     }
                     let _ = event_tx.send(BroadcastEvent::Private(ev));
                 }
             }
+        },
+        Command::CancelAll(reply_tx) => {
+            let cancelled = exchange.cancel_all_orders();
+            if let Some(tx) = reply_tx {
+                let order_ids: Vec<String> = cancelled
+                    .into_iter()
+                    .map(|o| o.order_id.0.to_string())
+                    .collect();
+                let _ = tx.send(order_ids);
+            }
         }
         Command::Cancel(req, reply_tx) => match exchange.cancel_order(req) {
             Ok(order) => {
                 if let Some(tx) = reply_tx {
-                    let _ = tx.send(order.order_id.0.to_string());
+                    let _ = tx.send(Ok(order.order_id.0.to_string()));
                 }
             }
-            Err(e) => tracing::warn!("cancel_order error: {:?}", e),
+            Err(e) => {
+                tracing::warn!("cancel_order error: {:?}", e);
+                if let Some(tx) = reply_tx {
+                    let _ = tx.send(Err(e.to_string()));
+                }
+            }
         },
         Command::Amend(req, reply_tx) => match exchange.amend_order(req) {
             Ok(order) => {
                 if let Some(tx) = reply_tx {
-                    let _ = tx.send(order.order_id.0.to_string());
+                    let _ = tx.send(Ok(order.order_id.0.to_string()));
                 }
             }
-            Err(e) => tracing::warn!("amend_order error: {:?}", e),
+            Err(e) => {
+                tracing::warn!("amend_order error: {:?}", e);
+                if let Some(tx) = reply_tx {
+                    let _ = tx.send(Err(e.to_string()));
+                }
+            }
         },
         Command::InjectOrderbook(_) | Command::InjectTrade(_) => {
             unreachable!("dummy commands go to run_dummy_command")
@@ -174,7 +198,10 @@ fn run_dummy_command(exchange: &mut PaperExchange, cmd: Command) {
                 tracing::warn!("inject_trade error: {:?}", e);
             }
         }
-        Command::PlaceOrder(_, _) | Command::Cancel(_, _) | Command::Amend(_, _) => {
+        Command::PlaceOrder(_, _)
+        | Command::CancelAll(_)
+        | Command::Cancel(_, _)
+        | Command::Amend(_, _) => {
             unreachable!("user commands go to run_user_command")
         }
     }

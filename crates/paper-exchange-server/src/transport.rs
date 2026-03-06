@@ -15,6 +15,8 @@ use tokio::sync::oneshot;
 use tracing::info;
 
 pub type SnapshotData = (Vec<Balance>, Vec<Position>);
+/// Optional reply for CancelAllOrders: core returns the canceled order_ids (UUID strings).
+pub type CancelAllReply = oneshot::Sender<Vec<String>>;
 
 /// Snapshot request: broadcast to all (on connect) or reply on a oneshot (get_account_snapshot).
 pub enum SnapshotRequest {
@@ -23,7 +25,7 @@ pub enum SnapshotRequest {
 }
 
 pub async fn ws_handler(ws: WebSocketUpgrade, state: Arc<AppState>) -> Response {
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+    ws.on_upgrade(move |socket| handle_socket(socket, state, true))
 }
 
 pub struct AppState {
@@ -32,10 +34,10 @@ pub struct AppState {
     pub event_tx: broadcast::Sender<BroadcastEvent>,
 }
 
-/// Optional reply for PlaceOrder: core sends the initial Execution (ack) on this oneshot so the requesting connection gets it directly.
-pub type PlaceOrderReply = oneshot::Sender<Execution>;
-/// Optional reply for Cancel/Amend: core sends the order_id (UUID string) so the requesting connection gets an ack directly.
-pub type OrderAckReply = oneshot::Sender<String>;
+/// Optional reply for PlaceOrder: Ok(execution) or Err(error message) so the connection can send Execution or Error.
+pub type PlaceOrderReply = oneshot::Sender<Result<Execution, String>>;
+/// Optional reply for Cancel/Amend: Ok(order_id) or Err(error message) so the connection can send ack or Error.
+pub type OrderAckReply = oneshot::Sender<Result<String, String>>;
 
 #[derive(Debug)]
 pub enum Command {
@@ -43,6 +45,7 @@ pub enum Command {
         paper_exchange_core::types::OrderRequest,
         Option<PlaceOrderReply>,
     ),
+    CancelAll(Option<CancelAllReply>),
     Cancel(
         paper_exchange_core::types::CancelRequest,
         Option<OrderAckReply>,
@@ -55,7 +58,11 @@ pub enum Command {
     InjectTrade(paper_exchange_core::types::PublicTrade),
 }
 
-pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
+/// If `trading` is true: full behavior (snapshot, commands, market + private). If false: market-only (connected + orderbook/trades, no snapshot, commands ignored).
+pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, trading: bool) {
+    let endpoint = if trading { "trading" } else { "market" };
+    info!("{} endpoint: client connected", endpoint);
+
     let (mut sender, mut receiver) = socket.split();
     let mut event_rx = state.event_tx.subscribe();
     let user_command_tx = state.user_command_tx.clone();
@@ -80,6 +87,12 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         }
                         Err(broadcast::error::RecvError::Closed) => break,
                     };
+                    // Market-only connections only get market events (orderbook, public_trade); skip private (executions, etc.).
+                    if !trading {
+                        if let BroadcastEvent::Private(_) = ev {
+                            continue;
+                        }
+                    }
                     let msg: ServerMessage = match ev {
                         BroadcastEvent::Market(m) => m.into(),
                         BroadcastEvent::Private(p) => p.into(),
@@ -104,82 +117,120 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         }
     });
 
-    // Now request broadcast snapshot so core sends; send_task is already waiting on event_rx.
-    if snapshot_tx.send(SnapshotRequest::Broadcast).is_ok() {
-        tracing::info!("new connection: account snapshot requested (broadcast)");
+    // Trading connections get account snapshot on connect; market-only do not.
+    if trading {
+        if snapshot_tx.send(SnapshotRequest::Broadcast).is_ok() {
+            tracing::info!("new trading connection: account snapshot requested (broadcast)");
+        }
+        tokio::task::yield_now().await;
     }
-    tokio::task::yield_now().await;
 
     while let Some(Ok(msg)) = receiver.next().await {
-        if let Message::Text(text) = msg {
-            if let Ok(client_msg) = serde_json::from_str::<ClientMessage>(&text) {
-                match client_msg {
-                    ClientMessage::GetAccountSnapshot => {
-                        let (reply_tx, reply_rx) = oneshot::channel();
-                        if snapshot_tx.send(SnapshotRequest::Reply(reply_tx)).is_ok() {
-                            let direct_tx = direct_tx.clone();
-                            tokio::spawn(async move {
-                                if let Ok((balances, positions)) = reply_rx.await {
-                                    let msgs: Vec<ServerMessage> = balances
-                                        .into_iter()
-                                        .map(ServerMessage::Balance)
-                                        .chain(positions.into_iter().map(ServerMessage::Position))
-                                        .collect();
-                                    let _ = direct_tx.send(msgs).await;
-                                }
-                            });
-                        }
-                    }
-                    ClientMessage::PlaceOrder { request } => {
-                        let (reply_tx, reply_rx) = oneshot::channel();
-                        if user_command_tx
-                            .send(Command::PlaceOrder(request, Some(reply_tx)))
-                            .is_ok()
-                        {
-                            let direct_tx = direct_tx.clone();
-                            tokio::spawn(async move {
-                                if let Ok(exec) = reply_rx.await {
-                                    let msg = ServerMessage::Execution(exec);
-                                    if let Ok(serialized) = serde_json::to_string(&msg) {
-                                        tracing::info!(
-                                            "k-paper: place_order ack sent (same connection): {}",
-                                            serialized
-                                        );
-                                    }
-                                    let _ = direct_tx.send(vec![msg]).await;
-                                }
-                            });
-                        }
-                    }
-                    ClientMessage::CancelOrder { order_id } => {
-                        if let Ok(uuid) = uuid::Uuid::parse_str(&order_id) {
-                            let (reply_tx, reply_rx) = oneshot::channel();
-                            if user_command_tx
-                                .send(Command::Cancel(
-                                    paper_exchange_core::types::CancelRequest::ByOrderId(
-                                        paper_exchange_core::types::OrderId(uuid),
-                                    ),
-                                    Some(reply_tx),
-                                ))
-                                .is_ok()
-                            {
-                                let direct_tx = direct_tx.clone();
-                                tokio::spawn(async move {
-                                    if let Ok(oid) = reply_rx.await {
-                                        let _ = direct_tx
-                                            .send(vec![ServerMessage::CancelAck { order_id: oid }])
-                                            .await;
-                                    }
-                                });
+        let Message::Text(text) = msg else { continue };
+        if !trading {
+            // Market-only: drain messages, do not process commands.
+            continue;
+        }
+        // Log every incoming text frame on trading endpoint for debugging (length + prefix).
+        let len = text.len();
+        let prefix: String = text.chars().take(200).collect();
+        if len > 200 {
+            info!("trading: incoming frame len={} prefix={}...", len, prefix);
+        } else {
+            info!("trading: incoming frame len={} body={}", len, prefix);
+        }
+        match serde_json::from_str::<ClientMessage>(&text) {
+            Ok(client_msg) => match &client_msg {
+                ClientMessage::GetAccountSnapshot => {
+                    info!("trading: command received: get_account_snapshot");
+                    let (reply_tx, reply_rx) = oneshot::channel();
+                    if snapshot_tx.send(SnapshotRequest::Reply(reply_tx)).is_ok() {
+                        let direct_tx = direct_tx.clone();
+                        tokio::spawn(async move {
+                            if let Ok((balances, positions)) = reply_rx.await {
+                                let n_balances = balances.len();
+                                let n_positions = positions.len();
+                                info!(
+                                    "trading: sending account snapshot ({} balances, {} positions)",
+                                    n_balances, n_positions
+                                );
+                                let msgs: Vec<ServerMessage> = balances
+                                    .into_iter()
+                                    .map(ServerMessage::Balance)
+                                    .chain(positions.into_iter().map(ServerMessage::Position))
+                                    .collect();
+                                let _ = direct_tx.send(msgs).await;
                             }
-                        }
+                        });
                     }
-                    ClientMessage::CancelByClientOrderId { client_order_id } => {
+                }
+                ClientMessage::PlaceOrder { request } => {
+                    info!(
+                        "trading: command received: place_order instrument_id={} side={:?} quantity={}",
+                        request.instrument_id, request.side, request.quantity
+                    );
+                    let (reply_tx, reply_rx) = oneshot::channel();
+                    if user_command_tx
+                        .send(Command::PlaceOrder(
+                            paper_exchange_core::types::OrderRequest::from(request.clone()),
+                            Some(reply_tx),
+                        ))
+                        .is_ok()
+                    {
+                        let direct_tx = direct_tx.clone();
+                        tokio::spawn(async move {
+                            match reply_rx.await {
+                                Ok(Ok(exec)) => {
+                                    info!(
+                                        "trading: sending execution report order_id={} instrument_id={}",
+                                        exec.order_id, exec.instrument_id
+                                    );
+                                    let _ =
+                                        direct_tx.send(vec![ServerMessage::Execution(exec)]).await;
+                                }
+                                Ok(Err(msg)) => {
+                                    info!("trading: sending place_order error: {}", msg);
+                                    let _ = direct_tx
+                                        .send(vec![ServerMessage::Error { message: msg }])
+                                        .await;
+                                }
+                                Err(_) => {}
+                            }
+                        });
+                    }
+                }
+                ClientMessage::CancelAllOrders => {
+                    info!("trading: command received: cancel_all_orders");
+                    let (reply_tx, reply_rx) = oneshot::channel();
+                    if user_command_tx
+                        .send(Command::CancelAll(Some(reply_tx)))
+                        .is_ok()
+                    {
+                        let direct_tx = direct_tx.clone();
+                        tokio::spawn(async move {
+                            if let Ok(order_ids) = reply_rx.await {
+                                info!(
+                                    "trading: sending CancelAllAck order_count={}",
+                                    order_ids.len()
+                                );
+                                let _ = direct_tx
+                                    .send(vec![ServerMessage::CancelAllAck { order_ids }])
+                                    .await;
+                            }
+                        });
+                    }
+                }
+                ClientMessage::CancelOrder { order_id } => {
+                    info!(
+                        "trading: command received: cancel_order order_id={}",
+                        order_id
+                    );
+                    if let Ok(uuid) = uuid::Uuid::parse_str(order_id) {
                         let (reply_tx, reply_rx) = oneshot::channel();
                         if user_command_tx
                             .send(Command::Cancel(
-                                paper_exchange_core::types::CancelRequest::ByClientOrderId(
-                                    paper_exchange_core::types::ClientOrderId(client_order_id),
+                                paper_exchange_core::types::CancelRequest::ByOrderId(
+                                    paper_exchange_core::types::OrderId(uuid),
                                 ),
                                 Some(reply_tx),
                             ))
@@ -187,44 +238,116 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         {
                             let direct_tx = direct_tx.clone();
                             tokio::spawn(async move {
-                                if let Ok(oid) = reply_rx.await {
-                                    let _ = direct_tx
-                                        .send(vec![ServerMessage::CancelAck { order_id: oid }])
-                                        .await;
+                                match reply_rx.await {
+                                    Ok(Ok(oid)) => {
+                                        info!("trading: sending CancelAck order_id={}", oid);
+                                        let _ = direct_tx
+                                            .send(vec![ServerMessage::CancelAck { order_id: oid }])
+                                            .await;
+                                    }
+                                    Ok(Err(msg)) => {
+                                        info!("trading: sending cancel_order error: {}", msg);
+                                        let _ = direct_tx
+                                            .send(vec![ServerMessage::Error { message: msg }])
+                                            .await;
+                                    }
+                                    Err(_) => {}
                                 }
                             });
                         }
                     }
-                    ClientMessage::AmendOrder {
-                        order_id,
-                        quantity,
-                        limit_price,
-                    } => {
-                        if let Ok(uuid) = uuid::Uuid::parse_str(&order_id) {
-                            let req = paper_exchange_core::types::AmendRequest {
-                                order_id: paper_exchange_core::types::OrderId(uuid),
-                                quantity: quantity
-                                    .and_then(|s| rust_decimal::Decimal::from_str(&s).ok()),
-                                limit_price: limit_price
-                                    .and_then(|s| rust_decimal::Decimal::from_str(&s).ok()),
-                            };
-                            let (reply_tx, reply_rx) = oneshot::channel();
-                            if user_command_tx
-                                .send(Command::Amend(req, Some(reply_tx)))
-                                .is_ok()
-                            {
-                                let direct_tx = direct_tx.clone();
-                                tokio::spawn(async move {
-                                    if let Ok(oid) = reply_rx.await {
+                }
+                ClientMessage::CancelByClientOrderId { client_order_id } => {
+                    info!(
+                        "trading: command received: cancel_by_client_order_id client_order_id={}",
+                        client_order_id
+                    );
+                    let (reply_tx, reply_rx) = oneshot::channel();
+                    if user_command_tx
+                        .send(Command::Cancel(
+                            paper_exchange_core::types::CancelRequest::ByClientOrderId(
+                                paper_exchange_core::types::ClientOrderId(client_order_id.clone()),
+                            ),
+                            Some(reply_tx),
+                        ))
+                        .is_ok()
+                    {
+                        let direct_tx = direct_tx.clone();
+                        tokio::spawn(async move {
+                            match reply_rx.await {
+                                Ok(Ok(oid)) => {
+                                    info!("trading: sending CancelAck order_id={}", oid);
+                                    let _ = direct_tx
+                                        .send(vec![ServerMessage::CancelAck { order_id: oid }])
+                                        .await;
+                                }
+                                Ok(Err(msg)) => {
+                                    info!(
+                                        "trading: sending cancel_by_client_order_id error: {}",
+                                        msg
+                                    );
+                                    let _ = direct_tx
+                                        .send(vec![ServerMessage::Error { message: msg }])
+                                        .await;
+                                }
+                                Err(_) => {}
+                            }
+                        });
+                    }
+                }
+                ClientMessage::AmendOrder {
+                    order_id,
+                    quantity,
+                    limit_price,
+                } => {
+                    info!(
+                        "trading: command received: amend_order order_id={} quantity={:?} limit_price={:?}",
+                        order_id, quantity, limit_price
+                    );
+                    if let Ok(uuid) = uuid::Uuid::parse_str(order_id) {
+                        let req = paper_exchange_core::types::AmendRequest {
+                            order_id: paper_exchange_core::types::OrderId(uuid),
+                            quantity: quantity
+                                .as_ref()
+                                .and_then(|s| rust_decimal::Decimal::from_str(s).ok()),
+                            limit_price: limit_price
+                                .as_ref()
+                                .and_then(|s| rust_decimal::Decimal::from_str(s).ok()),
+                        };
+                        let (reply_tx, reply_rx) = oneshot::channel();
+                        if user_command_tx
+                            .send(Command::Amend(req, Some(reply_tx)))
+                            .is_ok()
+                        {
+                            let direct_tx = direct_tx.clone();
+                            tokio::spawn(async move {
+                                match reply_rx.await {
+                                    Ok(Ok(oid)) => {
+                                        info!("trading: sending AmendAck order_id={}", oid);
                                         let _ = direct_tx
                                             .send(vec![ServerMessage::AmendAck { order_id: oid }])
                                             .await;
                                     }
-                                });
-                            }
+                                    Ok(Err(msg)) => {
+                                        info!("trading: sending amend_order error: {}", msg);
+                                        let _ = direct_tx
+                                            .send(vec![ServerMessage::Error { message: msg }])
+                                            .await;
+                                    }
+                                    Err(_) => {}
+                                }
+                            });
                         }
                     }
                 }
+            },
+            Err(e) => {
+                info!(
+                    "trading: parse_failed error={} len={} prefix={}",
+                    e,
+                    text.len(),
+                    text.chars().take(200).collect::<String>()
+                );
             }
         }
     }

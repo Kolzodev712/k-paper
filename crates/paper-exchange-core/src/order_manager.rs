@@ -119,7 +119,13 @@ impl OrderManager {
                 .get(&order_id)
                 .ok_or(ExchangeError::OrderNotFound)?;
             if order.status != OrderStatus::New && order.status != OrderStatus::PartiallyFilled {
-                return Err(ExchangeError::Validation("order not cancelable".into()));
+                let reason = match order.status {
+                    OrderStatus::Filled => "order already filled",
+                    OrderStatus::Canceled => "order already cancelled",
+                    OrderStatus::Rejected => "order was rejected",
+                    OrderStatus::New | OrderStatus::PartiallyFilled => unreachable!(),
+                };
+                return Err(ExchangeError::Validation(reason.into()));
             }
             (
                 order.instrument_id.clone(),
@@ -157,6 +163,26 @@ impl OrderManager {
         Ok(out)
     }
 
+    /// Cancel every open order (New/PartiallyFilled). Returns the orders that were canceled.
+    ///
+    /// This is best-effort: if an order becomes non-cancelable between enumeration and cancel,
+    /// it will be skipped and the rest will still be canceled.
+    pub fn cancel_all_orders(
+        &mut self,
+        account: &mut Account,
+        now: chrono::DateTime<Utc>,
+    ) -> Vec<Order> {
+        let ids: Vec<crate::types::OrderId> =
+            self.open_orders().into_iter().map(|o| o.order_id).collect();
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Ok(order) = self.cancel_order(CancelRequest::ByOrderId(id), account, now) {
+                out.push(order);
+            }
+        }
+        out
+    }
+
     pub fn amend_order(
         &mut self,
         req: AmendRequest,
@@ -170,7 +196,16 @@ impl OrderManager {
             .clone();
 
         if order.status != OrderStatus::New && order.status != OrderStatus::PartiallyFilled {
-            return Err(ExchangeError::Validation("order not amendable".into()));
+            let reason = match order.status {
+                OrderStatus::Filled => "order already filled",
+                OrderStatus::Canceled => "order already cancelled",
+                OrderStatus::Rejected => "order was rejected",
+                OrderStatus::New | OrderStatus::PartiallyFilled => unreachable!(),
+            };
+            return Err(ExchangeError::Validation(format!(
+                "order not amendable ({})",
+                reason
+            )));
         }
 
         let new_qty = req.quantity.unwrap_or(order.quantity);
