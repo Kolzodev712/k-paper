@@ -1,7 +1,7 @@
 //! Core loop: run PaperExchange in an async task, process commands via tokio channels, broadcast events.
 //! Fully async so no blocking across std/tokio boundary.
 
-use crate::transport::{Command, SnapshotRequest};
+use crate::transport::{Command, RestQuery, SnapshotRequest};
 use crate::wire::BroadcastEvent;
 use paper_exchange_core::config::{Config, FillModelConfig, InitialBalance};
 use paper_exchange_core::exchange::PaperExchange;
@@ -47,6 +47,7 @@ pub async fn run_core_loop(
     mut user_command_rx: tokio_mpsc::UnboundedReceiver<Command>,
     mut dummy_command_rx: tokio_mpsc::UnboundedReceiver<Command>,
     mut snapshot_rx: tokio_mpsc::UnboundedReceiver<SnapshotRequest>,
+    mut rest_query_rx: tokio_mpsc::UnboundedReceiver<RestQuery>,
     event_tx: broadcast::Sender<BroadcastEvent>,
 ) {
     let config = default_config();
@@ -61,7 +62,7 @@ pub async fn run_core_loop(
             let _ = event_tx.send(BroadcastEvent::Private(ev));
         }
 
-        // Then drain snapshot and user commands so they're never starved by dummy/market traffic.
+        // Then drain snapshot, REST queries, and user commands so they're never starved by dummy/market traffic.
         while let Ok(req) = snapshot_rx.try_recv() {
             match req {
                 SnapshotRequest::Broadcast => {
@@ -77,6 +78,9 @@ pub async fn run_core_loop(
                     tracing::info!("account snapshot sent (direct reply to connection)");
                 }
             }
+        }
+        while let Ok(q) = rest_query_rx.try_recv() {
+            handle_rest_query(&exchange, q);
         }
         while let Ok(cmd) = user_command_rx.try_recv() {
             run_user_command(&mut exchange, &event_tx, &mut private_rx, cmd);
@@ -105,6 +109,9 @@ pub async fn run_core_loop(
                         tracing::info!("account snapshot sent (direct reply to connection)");
                     }
                 }
+            }
+            Some(q) = rest_query_rx.recv() => {
+                handle_rest_query(&exchange, q);
             }
             Some(ev) = market_rx.recv() => {
                 let _ = event_tx.send(BroadcastEvent::Market(ev));
@@ -207,11 +214,42 @@ fn run_dummy_command(exchange: &mut PaperExchange, cmd: Command) {
     }
 }
 
+fn handle_rest_query(exchange: &PaperExchange, q: RestQuery) {
+    match q {
+        RestQuery::Balances(reply) => {
+            let balances = exchange.get_snapshot_data().0;
+            let _ = reply.send(balances);
+        }
+        RestQuery::OpenOrders {
+            instrument_id,
+            reply,
+        } => {
+            let iid = instrument_id.as_deref().map(InstrumentId::new);
+            let orders = exchange.get_open_orders(iid.as_ref());
+            let _ = reply.send(orders);
+        }
+        RestQuery::Trades {
+            instrument_id,
+            limit,
+            reply,
+        } => {
+            let iid = instrument_id.as_deref().map(InstrumentId::new);
+            let trades = exchange.get_trades(iid.as_ref(), limit);
+            let _ = reply.send(trades);
+        }
+        RestQuery::MarketInfo(reply) => {
+            let cfg = exchange.get_config();
+            let _ = reply.send(cfg);
+        }
+    }
+}
+
 /// Spawn the core loop as a tokio task; returns the broadcast sender for events.
 pub fn spawn_core_task(
     user_command_rx: tokio_mpsc::UnboundedReceiver<Command>,
     dummy_command_rx: tokio_mpsc::UnboundedReceiver<Command>,
     snapshot_rx: tokio_mpsc::UnboundedReceiver<SnapshotRequest>,
+    rest_query_rx: tokio_mpsc::UnboundedReceiver<RestQuery>,
 ) -> broadcast::Sender<BroadcastEvent> {
     let (event_tx, _) = broadcast::channel(256);
     let event_tx_clone = event_tx.clone();
@@ -220,6 +258,7 @@ pub fn spawn_core_task(
             user_command_rx,
             dummy_command_rx,
             snapshot_rx,
+            rest_query_rx,
             event_tx_clone,
         )
         .await

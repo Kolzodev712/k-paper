@@ -4,6 +4,7 @@
 //! Fully async with tokio multi-thread runtime; no blocking std threads.
 
 pub mod dummy_ob;
+pub mod rest;
 pub mod session;
 pub mod transport;
 pub mod wire;
@@ -21,6 +22,7 @@ pub fn run() {
     let (user_command_tx, user_command_rx) = mpsc::unbounded_channel();
     let (dummy_command_tx, dummy_command_rx) = mpsc::unbounded_channel();
     let (snapshot_tx, snapshot_rx) = mpsc::unbounded_channel();
+    let (rest_query_tx, rest_query_rx) = mpsc::unbounded_channel();
 
     let port = std::env::var("PAPER_EXCHANGE_PORT")
         .ok()
@@ -39,7 +41,12 @@ pub fn run() {
         .unwrap()
         .block_on(async {
             // Spawn core and dummy tasks only after the runtime is running.
-            let event_tx = session::spawn_core_task(user_command_rx, dummy_command_rx, snapshot_rx);
+            let event_tx = session::spawn_core_task(
+                user_command_rx,
+                dummy_command_rx,
+                snapshot_rx,
+                rest_query_rx,
+            );
             if dummy_ob_enabled {
                 dummy_ob::spawn_dummy_ob(dummy_ob::DummyObConfig::default(), dummy_command_tx);
                 tracing::info!("dummy orderbook generator enabled (BTC-USDT)");
@@ -50,12 +57,20 @@ pub fn run() {
             let state = Arc::new(transport::AppState {
                 user_command_tx,
                 snapshot_tx,
+                rest_query_tx,
                 event_tx: event_tx.clone(),
             });
             let app = axum::Router::new()
                 .route("/ws", axum::routing::get(ws_handler_with_state))
                 .route("/ws/market", axum::routing::get(ws_handler_market))
                 .route("/ws/trade", axum::routing::get(ws_handler_trade))
+                .route("/balances", axum::routing::get(rest::get_balances))
+                .route("/open_orders", axum::routing::get(rest::get_open_orders))
+                .route("/trades", axum::routing::get(rest::get_trades))
+                .route(
+                    "/exchange_info",
+                    axum::routing::get(rest::get_exchange_info),
+                )
                 .with_state(state);
 
             let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");

@@ -6,7 +6,8 @@ use axum::extract::WebSocketUpgrade;
 use axum::response::Response;
 use futures_util::stream::StreamExt;
 use futures_util::SinkExt;
-use paper_exchange_core::types::{Balance, Execution, Position};
+use paper_exchange_core::config::Config;
+use paper_exchange_core::types::{Balance, Execution, Order, Position};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -24,6 +25,21 @@ pub enum SnapshotRequest {
     Reply(oneshot::Sender<SnapshotData>),
 }
 
+/// REST query channel: HTTP handlers ask core for snapshots of current state.
+pub enum RestQuery {
+    Balances(oneshot::Sender<Vec<Balance>>),
+    OpenOrders {
+        instrument_id: Option<String>,
+        reply: oneshot::Sender<Vec<Order>>,
+    },
+    Trades {
+        instrument_id: Option<String>,
+        limit: Option<usize>,
+        reply: oneshot::Sender<Vec<Execution>>,
+    },
+    MarketInfo(oneshot::Sender<Config>),
+}
+
 pub async fn ws_handler(ws: WebSocketUpgrade, state: Arc<AppState>) -> Response {
     ws.on_upgrade(move |socket| handle_socket(socket, state, true))
 }
@@ -31,6 +47,7 @@ pub async fn ws_handler(ws: WebSocketUpgrade, state: Arc<AppState>) -> Response 
 pub struct AppState {
     pub user_command_tx: mpsc::UnboundedSender<Command>,
     pub snapshot_tx: mpsc::UnboundedSender<SnapshotRequest>,
+    pub rest_query_tx: mpsc::UnboundedSender<RestQuery>,
     pub event_tx: broadcast::Sender<BroadcastEvent>,
 }
 

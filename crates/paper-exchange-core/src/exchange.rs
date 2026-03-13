@@ -16,6 +16,8 @@ pub struct PaperExchange {
     orderbook: Orderbook,
     order_manager: OrderManager,
     account: Account,
+    /// In-memory trade history derived from executions (fills only, no acks). Used by REST /trades.
+    trades: Vec<Execution>,
     market_tx: mpsc::UnboundedSender<StreamEvent<MarketDataEvent>>,
     private_tx: mpsc::UnboundedSender<StreamEvent<PrivateEvent>>,
     market_sequence: u64,
@@ -44,6 +46,7 @@ impl PaperExchange {
             orderbook,
             order_manager,
             account,
+            trades: Vec::new(),
             market_tx,
             private_tx,
             market_sequence: 0,
@@ -150,6 +153,8 @@ impl PaperExchange {
             timestamp: now,
             reject_reason: None,
         };
+        // Persist fill in in-memory trade history for REST /trades.
+        self.trades.push(exec.clone());
         self.send_private(PrivateEvent::Execution(exec));
 
         let pt = PublicTrade {
@@ -212,6 +217,54 @@ impl PaperExchange {
         for pos in self.account.get_all_positions() {
             self.send_private(PrivateEvent::Position(pos));
         }
+    }
+
+    /// Return all open orders (New/PartiallyFilled), optionally filtered by instrument_id.
+    pub fn get_open_orders(&self, instrument_id: Option<&InstrumentId>) -> Vec<Order> {
+        let mut out: Vec<Order> = self
+            .order_manager
+            .open_orders()
+            .into_iter()
+            .filter(|o| {
+                instrument_id
+                    .map(|iid| &o.instrument_id == iid)
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect();
+        // Sort by created_at ascending for deterministic output.
+        out.sort_by_key(|o| o.created_at);
+        out
+    }
+
+    /// Return trade executions (fills only), optionally filtered by instrument_id and limited to the last N.
+    pub fn get_trades(
+        &self,
+        instrument_id: Option<&InstrumentId>,
+        limit: Option<usize>,
+    ) -> Vec<Execution> {
+        let mut trades: Vec<Execution> = self
+            .trades
+            .iter()
+            .filter(|e| {
+                instrument_id
+                    .map(|iid| &e.instrument_id == iid)
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect();
+        // Trades are stored in insertion order; keep as-is and apply limit from the end.
+        if let Some(n) = limit {
+            if trades.len() > n {
+                trades = trades.split_off(trades.len() - n);
+            }
+        }
+        trades
+    }
+
+    /// Return a copy of the static config (used to derive /exchange_info).
+    pub fn get_config(&self) -> Config {
+        self.config.clone()
     }
 
     pub fn cancel_order(&mut self, req: CancelRequest) -> Result<Order, ExchangeError> {
