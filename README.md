@@ -20,9 +20,12 @@ cargo build
 cargo run              # run main system binary (k-paper)
 cargo run -p paper-exchange-server   # same, via server crate
 cargo test -p paper-exchange-core
+cargo test --all -- --test-threads=1
 ```
 
-The main executable is **k-paper** at the repo root (`src/main.rs`). It delegates to the server; once Phase 2 is implemented, `cargo run` starts the paper exchange system.
+The main executable is **k-paper** at the repo root (`src/main.rs`). It delegates to the server; `cargo run` starts the paper exchange.
+
+**Documentation:** [docs/DEV-GUIDE.md](docs/DEV-GUIDE.md) — how to run (lab vs dev), configure YAML, scenarios, REST/WS integration, and pitfalls. API message schemas: [docs/CLIENT-INSTRUCTIONS.md](docs/CLIENT-INSTRUCTIONS.md), [docs/API-EXECUTION.md](docs/API-EXECUTION.md), [docs/API-MARKET-DATA.md](docs/API-MARKET-DATA.md).
 
 ## Crates
 

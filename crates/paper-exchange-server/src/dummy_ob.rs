@@ -45,6 +45,12 @@ pub struct DummyObConfig {
 
 impl Default for DummyObConfig {
     fn default() -> Self {
+        Self::with_seed(None)
+    }
+}
+
+impl DummyObConfig {
+    pub fn with_seed(seed: Option<u64>) -> Self {
         Self {
             instrument_id: InstrumentId::new("BTC-USDT"),
             initial_mid: 50_000.0,
@@ -54,7 +60,7 @@ impl Default for DummyObConfig {
             tick_size: decimal("0.01"),
             base_qty_per_level: 0.5,
             interval_ms: 500,
-            seed: None,
+            seed,
             trade_probability: 0.25,
             trade_max_qty: 0.1,
         }

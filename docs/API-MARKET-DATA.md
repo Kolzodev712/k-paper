@@ -15,15 +15,17 @@ ws://<host>:<port>/ws/market
 - **Port:** Set `PAPER_EXCHANGE_PORT` when starting the server (e.g. `19999`). Default `0` = OS-assigned.
 - **Path:** Use **`/ws/market`** for market data only (orderbook + public_trade; no snapshot, no commands). Alternatively `/ws` also delivers market data but includes trading messages; prefer `/ws/market` for read-only feeds.
 
-To get a continuous stream of synthetic data, start the server with:
+To get a continuous stream of synthetic data, start the server in **dev** profile (see [DEV-GUIDE.md](DEV-GUIDE.md)):
 
 ```bash
-export PAPER_EXCHANGE_DUMMY_OB=1
+export PAPER_EXCHANGE_PROFILE=dev
 export PAPER_EXCHANGE_PORT=19999   # optional
-cargo run
+cargo run -p paper-exchange-server
 ```
 
-Without `PAPER_EXCHANGE_DUMMY_OB=1`, orderbook and public trade messages are only sent when something else injects them (e.g. a scripted scenario).
+Legacy: `PAPER_EXCHANGE_DUMMY_OB=1` also enables the dummy orderbook.
+
+Without dev profile or a scenario, orderbook and public trade messages are only sent when something injects them (e.g. `PAPER_EXCHANGE_SCENARIO`).
 
 ---
 

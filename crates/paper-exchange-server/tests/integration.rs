@@ -10,6 +10,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 #[tokio::test]
 async fn trade_endpoint_returns_execution_for_place_order() {
     std::env::set_var("PAPER_EXCHANGE_PORT", "19996");
+    std::env::set_var("PAPER_EXCHANGE_DUMMY_OB", "1");
     let _server = std::thread::spawn(|| paper_exchange_server::run());
     tokio::time::sleep(Duration::from_millis(500)).await;
 

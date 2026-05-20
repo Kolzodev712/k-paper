@@ -6,6 +6,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FillModelKind {
     ImmediateCross,
     TradeThrough,
@@ -42,4 +43,22 @@ pub struct Config {
     pub instruments: Vec<Instrument>,
     pub initial_balances: Vec<InitialBalance>,
     pub fill_model: FillModelConfig,
+    /// Max fills kept for REST `/trades` (0 = unlimited).
+    #[serde(default = "default_max_trade_history")]
+    pub max_trade_history: usize,
+}
+
+fn default_max_trade_history() -> usize {
+    10_000
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            instruments: Vec::new(),
+            initial_balances: Vec::new(),
+            fill_model: FillModelConfig::default(),
+            max_trade_history: default_max_trade_history(),
+        }
+    }
 }

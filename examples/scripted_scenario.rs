@@ -60,6 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
         ],
         fill_model: FillModelConfig::default(),
+        max_trade_history: 10_000,
     };
 
     let (mut exchange, mut market_rx, mut private_rx) = PaperExchange::new(config);

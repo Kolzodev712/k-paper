@@ -115,15 +115,6 @@ impl PaperExchange {
         let trade_id = TradeId::new();
         let now = self.now();
 
-        self.account.apply_fill(
-            order.side.clone(),
-            &instrument.quote_asset,
-            &instrument.base_asset,
-            fill.price,
-            fill.quantity,
-            fill.fee,
-        );
-
         let o = self.order_manager.get_order_mut(&order.order_id).unwrap();
         o.filled_qty += fill.quantity;
         o.updated_at = now;
@@ -153,8 +144,13 @@ impl PaperExchange {
             timestamp: now,
             reject_reason: None,
         };
-        // Persist fill in in-memory trade history for REST /trades.
+        // Persist fill in in-memory trade history for REST /trades (bounded).
         self.trades.push(exec.clone());
+        let cap = self.config.max_trade_history;
+        if cap > 0 && self.trades.len() > cap {
+            let drop = self.trades.len() - cap;
+            self.trades.drain(0..drop);
+        }
         self.send_private(PrivateEvent::Execution(exec));
 
         let pt = PublicTrade {

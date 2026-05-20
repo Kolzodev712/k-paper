@@ -1,4 +1,4 @@
-# Example instruments for paper exchange (optional; scripted_scenario builds config in code)
+# Paper exchange runtime config (PAPER_EXCHANGE_CONFIG, default: config/instruments.yaml)
 instruments:
   - id: BTC-USDT
     symbol: BTC-USDT
@@ -12,3 +12,15 @@ initial_balances:
     amount: 1000000
   - asset: BTC
     amount: 100
+fill_model:
+  kind: immediate_cross
+  slippage_bps: 0
+  fee_bps: 0
+  partial_fills: false
+max_trade_history: 10000
+# Used when profile=dev or PAPER_EXCHANGE_DUMMY_OB=1 (disabled if PAPER_EXCHANGE_SCENARIO is set)
+dummy_ob:
+  instrument_id: BTC-USDT
+  initial_mid: 50000
+  interval_ms: 500
+  seed: null

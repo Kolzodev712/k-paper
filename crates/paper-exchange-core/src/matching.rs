@@ -18,6 +18,11 @@ pub fn try_fill(
     book: Option<&InstrumentOrderbook>,
     config: &FillModelConfig,
 ) -> Option<Fill> {
+    // Scripted: fills only when scenario injects trades / explicit events, not on book cross.
+    if matches!(config.kind, crate::config::FillModelKind::Scripted) {
+        return None;
+    }
+
     let book = book?;
     let remaining = order.quantity - order.filled_qty;
     if remaining <= Decimal::ZERO {

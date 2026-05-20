@@ -39,6 +39,7 @@ fn test_config() -> Config {
             },
         ],
         fill_model: FillModelConfig::default(),
+        max_trade_history: 10_000,
     }
 }
 

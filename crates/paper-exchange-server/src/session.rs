@@ -3,54 +3,22 @@
 
 use crate::transport::{Command, RestQuery, SnapshotRequest};
 use crate::wire::BroadcastEvent;
-use paper_exchange_core::config::{Config, FillModelConfig, InitialBalance};
+use paper_exchange_core::config::Config;
 use paper_exchange_core::exchange::PaperExchange;
 use paper_exchange_core::types::PrivateEvent;
 use paper_exchange_core::types::*;
-use rust_decimal::Decimal;
-use std::str::FromStr;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc as tokio_mpsc;
 
-fn decimal(s: &str) -> Decimal {
-    Decimal::from_str(s).unwrap_or(Decimal::ZERO)
-}
-
-fn default_config() -> Config {
-    Config {
-        instruments: vec![Instrument {
-            id: InstrumentId::new("BTC-USDT"),
-            symbol: "BTC-USDT".to_string(),
-            base_asset: Asset("BTC".to_string()),
-            quote_asset: Asset("USDT".to_string()),
-            tick_size: decimal("0.01"),
-            lot_size: decimal("0.001"),
-            min_notional: decimal("10"),
-            instrument_type: None,
-        }],
-        initial_balances: vec![
-            InitialBalance {
-                asset: Asset("USDT".to_string()),
-                amount: decimal("1000000"),
-            },
-            InitialBalance {
-                asset: Asset("BTC".to_string()),
-                amount: decimal("100"),
-            },
-        ],
-        fill_model: FillModelConfig::default(),
-    }
-}
-
 /// Async core loop: one select! for commands and for exchange outputs (market + private).
 pub async fn run_core_loop(
+    config: Config,
     mut user_command_rx: tokio_mpsc::UnboundedReceiver<Command>,
     mut dummy_command_rx: tokio_mpsc::UnboundedReceiver<Command>,
     mut snapshot_rx: tokio_mpsc::UnboundedReceiver<SnapshotRequest>,
     mut rest_query_rx: tokio_mpsc::UnboundedReceiver<RestQuery>,
     event_tx: broadcast::Sender<BroadcastEvent>,
 ) {
-    let config = default_config();
     let (mut exchange, mut market_rx, mut private_rx) = PaperExchange::new(config);
 
     loop {
@@ -246,6 +214,7 @@ fn handle_rest_query(exchange: &PaperExchange, q: RestQuery) {
 
 /// Spawn the core loop as a tokio task; returns the broadcast sender for events.
 pub fn spawn_core_task(
+    config: Config,
     user_command_rx: tokio_mpsc::UnboundedReceiver<Command>,
     dummy_command_rx: tokio_mpsc::UnboundedReceiver<Command>,
     snapshot_rx: tokio_mpsc::UnboundedReceiver<SnapshotRequest>,
@@ -255,6 +224,7 @@ pub fn spawn_core_task(
     let event_tx_clone = event_tx.clone();
     tokio::spawn(async move {
         run_core_loop(
+            config,
             user_command_rx,
             dummy_command_rx,
             snapshot_rx,

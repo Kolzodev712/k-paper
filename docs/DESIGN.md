@@ -18,7 +18,7 @@ Scripted scenarios are JSON files with an `events` array. Each event has a type 
 - **trade:** `instrument_id`, `price`, `quantity`, `side` ("Buy" or "Sell"). Injects a public trade and runs matching.
 - **place_order:** `instrument_id`, `side`, `quantity`, `limit_price` (optional). Places a limit order (order_type defaults to Limit).
 
-Events are applied in order. See `config/scenario_01.json` and `examples/scripted_scenario.rs`.
+Events are applied in order. See `config/scenario_01.json`, `examples/scripted_scenario.rs`, and [DEV-GUIDE.md](DEV-GUIDE.md) (server startup via `PAPER_EXCHANGE_SCENARIO`).
 
 ## TODO
 
