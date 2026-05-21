@@ -1,0 +1,14 @@
+{
+  "name": "flash_drop_timeline",
+  "events": [
+    {
+      "at_ms": 5000,
+      "effect": {
+        "type": "drop",
+        "instrument_id": "BTC-USDT",
+        "pct": -0.05,
+        "over_ticks": 10
+      }
+    }
+  ]
+}

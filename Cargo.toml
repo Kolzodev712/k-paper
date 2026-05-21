@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     ".",
     "crates/paper-exchange-core",
+    "crates/paper-exchange-scenarios",
     "crates/paper-exchange-server",
 ]
 

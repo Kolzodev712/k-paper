@@ -10,17 +10,18 @@ k-paper is a **single-account paper exchange**: one in-memory orderbook per inst
 
 ```
 ┌─────────────┐     ┌──────────────────┐     ┌─────────────────────┐
-│ Dummy OB    │────▶│ paper-exchange-  │────▶│ WebSocket broadcast │
-│ (dev only)  │     │ server (axum)    │     │ + REST queries      │
+│ Market engine│────▶│ paper-exchange-  │────▶│ WebSocket broadcast │
+│ (N pairs)   │     │ server (axum)    │     │ + REST queries      │
 └─────────────┘     │        │         │     └─────────────────────┘
 ┌─────────────┐     │        ▼         │
 │ Scenario    │────▶│ PaperExchange    │
-│ (lab)       │     │ (core library)   │
+│ overlay     │     │ (core library)   │
 └─────────────┘     └──────────────────┘
 ```
 
 - **Core** (`paper-exchange-core`): matching, balances, orders, no network I/O.
-- **Server** (`paper-exchange-server`): loads YAML config, optional dummy OB or scenario, exposes HTTP/WS.
+- **Server** (`paper-exchange-server`): loads YAML config, multi-instrument market engine, optional scenario overlay, exposes HTTP/WS.
+- **Scenarios** (`paper-exchange-scenarios`): timed effects (`Drop`, `Rally`) that modulate the baseline engine.
 
 ---
 
@@ -58,19 +59,41 @@ cargo run -p paper-exchange-server
 
 Equivalent legacy flag: `export PAPER_EXCHANGE_DUMMY_OB=1`.
 
-### Lab mode (scripted, deterministic)
+### Scenario overlay (baseline + shock)
 
-Best for CI and reproducible tests.
+Continuous random OB on **all instruments** in `instruments.yaml`, with timed effects (e.g. BTC drop at 30s):
 
 ```bash
-export PAPER_EXCHANGE_PROFILE=lab
-export PAPER_EXCHANGE_SCENARIO=config/scenario_01.json
+export PAPER_EXCHANGE_PROFILE=dev
+export PAPER_EXCHANGE_SCENARIO=flash_drop_v1
+export PAPER_EXCHANGE_SEED=42
 export PAPER_EXCHANGE_PORT=19999
 cargo run -p paper-exchange-server
 ```
 
-- Scenario runs at startup (orderbook injections, optional `place_order` events).
-- Dummy OB is **off** unless you also set `PAPER_EXCHANGE_DUMMY_OB=1`.
+**Named presets** (`PAPER_EXCHANGE_SCENARIO=<name>`):
+
+| Preset | Mechanics (what to test) |
+|--------|---------------------------|
+| `flash_drop_v1` | Single sharp BTC selloff (~5% over 10 ticks @ 30s) |
+| `btc_rally_v1` | Single BTC rally (~3% @ 15s) |
+| `dead_cat_bounce_v1` | Drop ~8% then partial rally ~4% — dead-cat bounce / re-risk timing |
+| `risk_off_v1` | Staggered drops BTC → ETH → SOL — correlated risk-off / hedging |
+| `bull_trap_v1` | Rally then reversal drop — failed breakout / chase-and-stop |
+
+Or a timeline file with `"at_ms"` fields: `config/scenarios/flash_drop_timeline.json`.
+
+The market engine **keeps running**; overlay adjusts effective mid for the affected pair over `over_ticks`.
+
+### Lab static scenario (legacy fixtures)
+
+One-shot JSON at startup (`"t":"orderbook"` events, no `at_ms`) — **no** market engine unless `PAPER_EXCHANGE_DUMMY_OB=1`:
+
+```bash
+export PAPER_EXCHANGE_PROFILE=lab
+export PAPER_EXCHANGE_SCENARIO=config/scenario_01.json
+cargo run -p paper-exchange-server
+```
 
 For **resting orders** (cancel/amend tests), set in `config/instruments.yaml`:
 
@@ -90,7 +113,7 @@ With `immediate_cross` (default), aggressive limits fill as soon as the book cro
 | `PAPER_EXCHANGE_CONFIG` | `config/instruments.yaml` | Path to exchange YAML (also searched next to crate if cwd has no file) |
 | `PAPER_EXCHANGE_PROFILE` | `lab` if no dummy OB; `dev` if `PAPER_EXCHANGE_DUMMY_OB=1` | `lab` or `dev` |
 | `PAPER_EXCHANGE_DUMMY_OB` | off | `1` or `true` — enable random-walk orderbook (implies dev) |
-| `PAPER_EXCHANGE_SCENARIO` | — | Path to scenario JSON; disables dummy OB unless `DUMMY_OB` forced |
+| `PAPER_EXCHANGE_SCENARIO` | — | Preset name (`flash_drop_v1`), overlay timeline JSON (`at_ms`), or static fixture JSON |
 | `PAPER_EXCHANGE_SCENARIO_INTERVAL_MS` | `0` | Sleep between scenario events (ms) |
 | `PAPER_EXCHANGE_SEED` | — | RNG seed for dummy OB (overrides YAML `dummy_ob.seed`) |
 | `PAPER_EXCHANGE_HOST` | `127.0.0.1` | Bind host |

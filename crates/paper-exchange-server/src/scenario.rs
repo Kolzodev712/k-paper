@@ -1,19 +1,117 @@
-//! Scripted scenario: inject orderbook/trades and optional orders at startup.
+//! Scenario drivers: static startup JSON (lab) or timed overlay on baseline market engine.
 
+use crate::market_runtime::MarketRuntime;
 use crate::transport::Command;
 use paper_exchange_core::types::*;
+use paper_exchange_scenarios::{preset_by_name, ScenarioTimeline};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 fn decimal(s: &str) -> Decimal {
     Decimal::from_str(s).unwrap_or(Decimal::ZERO)
 }
 
+#[derive(Clone, Debug)]
+pub enum ScenarioLoad {
+    /// Timed overlay effects on running market engine (baseline keeps emitting).
+    Overlay(ScenarioTimeline),
+    /// One-shot inject events at startup (legacy lab fixtures).
+    Static(std::path::PathBuf),
+}
+
+pub fn resolve_scenario(spec: &str) -> Result<ScenarioLoad, String> {
+    if let Some(timeline) = preset_by_name(spec) {
+        return Ok(ScenarioLoad::Overlay(timeline));
+    }
+    let path = std::path::Path::new(spec);
+    if path.exists() {
+        let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        if content.contains("\"at_ms\"") || content.contains("at_ms") {
+            let timeline = ScenarioTimeline::from_json(&content).map_err(|e| e.to_string())?;
+            return Ok(ScenarioLoad::Overlay(timeline));
+        }
+        return Ok(ScenarioLoad::Static(path.to_path_buf()));
+    }
+    Err(format!("unknown scenario preset or missing file: {spec}"))
+}
+
+pub fn spawn_overlay_timeline(timeline: ScenarioTimeline, runtime: Arc<Mutex<MarketRuntime>>) {
+    let name = timeline.name.clone().unwrap_or_else(|| "overlay".into());
+    let events = timeline.events.clone();
+    tokio::spawn(async move {
+        tracing::info!(
+            "scenario overlay {:?}: {} timed effects",
+            name,
+            events.len()
+        );
+        let mut elapsed_ms: u64 = 0;
+        for timed in events {
+            if timed.at_ms > elapsed_ms {
+                tokio::time::sleep(tokio::time::Duration::from_millis(timed.at_ms - elapsed_ms))
+                    .await;
+                elapsed_ms = timed.at_ms;
+            }
+            let mut rt = match runtime.lock() {
+                Ok(g) => g,
+                Err(_) => return,
+            };
+            let mids = rt.mids();
+            timeline.apply_effect(&timed.effect, &mut rt.overlay, &mids);
+            tracing::info!(
+                "scenario overlay {:?}: applied effect at {}ms",
+                name,
+                timed.at_ms
+            );
+        }
+    });
+}
+
+pub fn spawn_static_scenario(
+    path: impl AsRef<Path>,
+    interval_ms: u64,
+    user_command_tx: mpsc::UnboundedSender<Command>,
+    dummy_command_tx: mpsc::UnboundedSender<Command>,
+) {
+    let path = path.as_ref().to_path_buf();
+    tokio::spawn(async move {
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("scenario {}: {}", path.display(), e);
+                return;
+            }
+        };
+        let scenario: StaticScenario = match serde_json::from_str(&content) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!("scenario parse {}: {}", path.display(), e);
+                return;
+            }
+        };
+        tracing::info!(
+            "static scenario {} ({} events, interval_ms={})",
+            path.display(),
+            scenario.events.len(),
+            interval_ms
+        );
+        for (i, ev) in scenario.events.into_iter().enumerate() {
+            if i > 0 && interval_ms > 0 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(interval_ms)).await;
+            }
+            if let Err(e) = dispatch_static_event(ev, &user_command_tx, &dummy_command_tx) {
+                tracing::warn!("scenario event {}: {}", i, e);
+            }
+        }
+        tracing::info!("static scenario {} finished", path.display());
+    });
+}
+
 #[derive(Debug, Deserialize)]
-struct ScenarioEvent {
+struct StaticScenarioEvent {
     t: String,
     #[serde(default)]
     instrument_id: Option<String>,
@@ -36,52 +134,12 @@ struct ScenarioEvent {
 }
 
 #[derive(Debug, Deserialize)]
-struct Scenario {
-    events: Vec<ScenarioEvent>,
+struct StaticScenario {
+    events: Vec<StaticScenarioEvent>,
 }
 
-pub fn spawn_scenario(
-    path: impl AsRef<Path>,
-    interval_ms: u64,
-    user_command_tx: mpsc::UnboundedSender<Command>,
-    dummy_command_tx: mpsc::UnboundedSender<Command>,
-) {
-    let path = path.as_ref().to_path_buf();
-    tokio::spawn(async move {
-        let content = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("scenario {}: {}", path.display(), e);
-                return;
-            }
-        };
-        let scenario: Scenario = match serde_json::from_str(&content) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!("scenario parse {}: {}", path.display(), e);
-                return;
-            }
-        };
-        tracing::info!(
-            "running scenario {} ({} events, interval_ms={})",
-            path.display(),
-            scenario.events.len(),
-            interval_ms
-        );
-        for (i, ev) in scenario.events.into_iter().enumerate() {
-            if i > 0 && interval_ms > 0 {
-                tokio::time::sleep(tokio::time::Duration::from_millis(interval_ms)).await;
-            }
-            if let Err(e) = dispatch_event(ev, &user_command_tx, &dummy_command_tx) {
-                tracing::warn!("scenario event {}: {}", i, e);
-            }
-        }
-        tracing::info!("scenario {} finished", path.display());
-    });
-}
-
-fn dispatch_event(
-    ev: ScenarioEvent,
+fn dispatch_static_event(
+    ev: StaticScenarioEvent,
     user_command_tx: &mpsc::UnboundedSender<Command>,
     dummy_command_tx: &mpsc::UnboundedSender<Command>,
 ) -> Result<(), String> {

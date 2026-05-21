@@ -1,0 +1,11 @@
+[package]
+name = "paper-exchange-scenarios"
+version = "0.1.0"
+edition = "2021"
+description = "Scenario timelines and market overlay effects for k-paper."
+license = "UNLICENSED"
+
+[dependencies]
+paper-exchange-core = { path = "../paper-exchange-core" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

@@ -935,6 +935,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "paper-exchange-scenarios"
+version = "0.1.0"
+dependencies = [
+ "paper-exchange-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "paper-exchange-server"
 version = "0.1.0"
 dependencies = [
@@ -942,6 +951,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "paper-exchange-core",
+ "paper-exchange-scenarios",
  "rand",
  "rust_decimal",
  "serde",

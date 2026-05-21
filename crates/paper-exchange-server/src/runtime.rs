@@ -1,16 +1,11 @@
 //! Server runtime: load YAML config, resolve lab/dev profile from environment.
 
-use crate::dummy_ob::DummyObConfig;
+use crate::market_engine::{default_initial_mid, InstrumentMarketSpec, MarketEngineConfig};
+use crate::scenario::{resolve_scenario, ScenarioLoad};
 use paper_exchange_core::config::{Config, FillModelConfig, InitialBalance};
-use paper_exchange_core::types::{Instrument, InstrumentId};
-use rust_decimal::Decimal;
+use paper_exchange_core::types::Instrument;
 use serde::Deserialize;
 use std::path::PathBuf;
-use std::str::FromStr;
-
-fn decimal(s: &str) -> Decimal {
-    Decimal::from_str(s).unwrap_or(Decimal::ZERO)
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RuntimeProfile {
@@ -29,7 +24,10 @@ struct ExchangeConfigFile {
     #[serde(default = "default_max_trade_history")]
     max_trade_history: usize,
     #[serde(default)]
-    dummy_ob: Option<DummyObFile>,
+    market: Option<MarketFile>,
+    /// Legacy section name; merged with `market` if present.
+    #[serde(default)]
+    dummy_ob: Option<MarketFile>,
 }
 
 fn default_max_trade_history() -> usize {
@@ -37,19 +35,13 @@ fn default_max_trade_history() -> usize {
 }
 
 #[derive(Debug, Deserialize)]
-struct DummyObFile {
-    #[serde(default)]
-    instrument_id: Option<String>,
-    #[serde(default = "default_initial_mid")]
-    initial_mid: f64,
+struct MarketFile {
     #[serde(default = "default_step")]
     step: f64,
     #[serde(default = "default_spread_half")]
     spread_half: f64,
     #[serde(default = "default_levels")]
     levels: usize,
-    #[serde(default = "default_tick_size")]
-    tick_size: String,
     #[serde(default = "default_base_qty")]
     base_qty_per_level: f64,
     #[serde(default = "default_interval_ms")]
@@ -60,11 +52,18 @@ struct DummyObFile {
     trade_probability: f64,
     #[serde(default = "default_trade_max_qty")]
     trade_max_qty: f64,
+    /// Per-instrument mid overrides (optional).
+    #[serde(default)]
+    instruments: Vec<MarketInstrumentFile>,
 }
 
-fn default_initial_mid() -> f64 {
-    50_000.0
+#[derive(Debug, Deserialize)]
+struct MarketInstrumentFile {
+    id: String,
+    #[serde(default)]
+    initial_mid: Option<f64>,
 }
+
 fn default_step() -> f64 {
     100.0
 }
@@ -73,9 +72,6 @@ fn default_spread_half() -> f64 {
 }
 fn default_levels() -> usize {
     5
-}
-fn default_tick_size() -> String {
-    "0.01".into()
 }
 fn default_base_qty() -> f64 {
     0.5
@@ -90,33 +86,13 @@ fn default_trade_max_qty() -> f64 {
     0.1
 }
 
-impl DummyObFile {
-    fn into_config(self, env_seed: Option<u64>) -> DummyObConfig {
-        let instrument_id =
-            InstrumentId::new(self.instrument_id.unwrap_or_else(|| "BTC-USDT".to_string()));
-        DummyObConfig {
-            instrument_id,
-            initial_mid: self.initial_mid,
-            step: self.step,
-            spread_half: self.spread_half,
-            levels: self.levels,
-            tick_size: decimal(&self.tick_size),
-            base_qty_per_level: self.base_qty_per_level,
-            interval_ms: self.interval_ms,
-            seed: env_seed.or(self.seed),
-            trade_probability: self.trade_probability,
-            trade_max_qty: self.trade_max_qty,
-        }
-    }
-}
-
 /// Resolved server startup settings.
 pub struct ServerSettings {
     pub exchange_config: Config,
     pub profile: RuntimeProfile,
-    pub dummy_ob: Option<DummyObConfig>,
-    pub scenario_path: Option<PathBuf>,
-    /// Delay between scripted scenario events (ms); 0 = run back-to-back at startup.
+    pub market_engine: Option<MarketEngineConfig>,
+    pub scenario: Option<ScenarioLoad>,
+    /// Delay between static scenario inject events (ms).
     pub scenario_interval_ms: u64,
 }
 
@@ -140,18 +116,23 @@ pub fn load_settings() -> Result<ServerSettings, Box<dyn std::error::Error + Sen
     let content = std::fs::read_to_string(&config_path)?;
     let file: ExchangeConfigFile = serde_yaml::from_str(&content)?;
     let exchange_config = Config {
-        instruments: file.instruments,
+        instruments: file.instruments.clone(),
         initial_balances: file.initial_balances,
         fill_model: file.fill_model,
         max_trade_history: file.max_trade_history,
     };
 
-    let scenario_path = std::env::var("PAPER_EXCHANGE_SCENARIO")
+    let scenario_spec = std::env::var("PAPER_EXCHANGE_SCENARIO")
         .ok()
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from);
+        .filter(|s| !s.is_empty());
 
-    let profile = resolve_profile(&scenario_path);
+    let scenario = scenario_spec
+        .as_deref()
+        .map(resolve_scenario)
+        .transpose()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+
+    let profile = resolve_profile(&scenario);
 
     let env_seed = std::env::var("PAPER_EXCHANGE_SEED")
         .ok()
@@ -162,20 +143,30 @@ pub fn load_settings() -> Result<ServerSettings, Box<dyn std::error::Error + Sen
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
 
-    let dummy_ob = resolve_dummy_ob(&profile, &scenario_path, file.dummy_ob, env_seed);
+    let market_file = file.market.or(file.dummy_ob);
+    let market_engine = build_market_engine(
+        &profile,
+        &scenario,
+        &exchange_config.instruments,
+        market_file,
+        env_seed,
+    );
 
     Ok(ServerSettings {
         exchange_config,
         profile,
-        dummy_ob,
-        scenario_path,
+        market_engine,
+        scenario,
         scenario_interval_ms,
     })
 }
 
-fn resolve_profile(scenario_path: &Option<PathBuf>) -> RuntimeProfile {
-    if scenario_path.is_some() {
+fn resolve_profile(scenario: &Option<ScenarioLoad>) -> RuntimeProfile {
+    if matches!(scenario, Some(ScenarioLoad::Static(_))) {
         return RuntimeProfile::Lab;
+    }
+    if scenario.is_some() {
+        return RuntimeProfile::Dev;
     }
     match std::env::var("PAPER_EXCHANGE_PROFILE")
         .unwrap_or_default()
@@ -196,43 +187,94 @@ fn resolve_profile(scenario_path: &Option<PathBuf>) -> RuntimeProfile {
     }
 }
 
-fn resolve_dummy_ob(
+fn build_market_engine(
     profile: &RuntimeProfile,
-    scenario_path: &Option<PathBuf>,
-    file: Option<DummyObFile>,
+    scenario: &Option<ScenarioLoad>,
+    instruments: &[Instrument],
+    market_file: Option<MarketFile>,
     env_seed: Option<u64>,
-) -> Option<DummyObConfig> {
+) -> Option<MarketEngineConfig> {
     let force_dummy = std::env::var("PAPER_EXCHANGE_DUMMY_OB")
         .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
 
-    if scenario_path.is_some() && !force_dummy {
+    let overlay = matches!(scenario, Some(ScenarioLoad::Overlay(_)));
+    let static_only = matches!(scenario, Some(ScenarioLoad::Static(_)));
+
+    if static_only && !force_dummy {
         return None;
     }
 
-    match profile {
-        RuntimeProfile::Lab if !force_dummy => None,
-        RuntimeProfile::Lab | RuntimeProfile::Dev => {
-            file.map(|f| f.into_config(env_seed)).or_else(|| {
-                if matches!(profile, RuntimeProfile::Dev) || force_dummy {
-                    Some(DummyObConfig::with_seed(env_seed))
-                } else {
-                    None
-                }
-            })
-        }
+    let enable =
+        overlay || force_dummy || matches!(profile, RuntimeProfile::Dev) || market_file.is_some();
+
+    if !enable {
+        return None;
     }
+
+    let mf = market_file.unwrap_or_else(|| MarketFile {
+        step: default_step(),
+        spread_half: default_spread_half(),
+        levels: default_levels(),
+        base_qty_per_level: default_base_qty(),
+        interval_ms: default_interval_ms(),
+        seed: None,
+        trade_probability: default_trade_probability(),
+        trade_max_qty: default_trade_max_qty(),
+        instruments: vec![],
+    });
+
+    let mid_overrides: std::collections::HashMap<String, f64> = mf
+        .instruments
+        .iter()
+        .map(|i| {
+            (
+                i.id.clone(),
+                i.initial_mid.unwrap_or_else(|| default_initial_mid(&i.id)),
+            )
+        })
+        .collect();
+
+    let specs: Vec<InstrumentMarketSpec> = instruments
+        .iter()
+        .map(|inst| {
+            let id = inst.id.0.clone();
+            let initial = mid_overrides
+                .get(&id)
+                .copied()
+                .unwrap_or_else(|| default_initial_mid(&id));
+            InstrumentMarketSpec {
+                instrument_id: inst.id.clone(),
+                initial_mid: initial,
+                tick_size: inst.tick_size,
+            }
+        })
+        .collect();
+
+    Some(MarketEngineConfig {
+        instruments: specs,
+        step: mf.step,
+        spread_half: mf.spread_half,
+        levels: mf.levels,
+        base_qty_per_level: mf.base_qty_per_level,
+        interval_ms: mf.interval_ms,
+        seed: env_seed.or(mf.seed),
+        trade_probability: mf.trade_probability,
+        trade_max_qty: mf.trade_max_qty,
+    })
 }
 
 pub fn log_startup(settings: &ServerSettings, bound: std::net::SocketAddr) {
     tracing::info!("paper exchange listening on {}", bound);
+    let scenario_desc = settings.scenario.as_ref().map(|s| match s {
+        ScenarioLoad::Overlay(t) => format!("overlay({})", t.name.as_deref().unwrap_or("unnamed")),
+        ScenarioLoad::Static(p) => format!("static({})", p.display()),
+    });
     tracing::info!(
-        "profile={:?} scenario={:?} dummy_ob={}",
+        "profile={:?} scenario={:?} market_engine={} instruments={}",
         settings.profile,
-        settings
-            .scenario_path
-            .as_ref()
-            .map(|p| p.display().to_string()),
-        settings.dummy_ob.is_some()
+        scenario_desc,
+        settings.market_engine.is_some(),
+        settings.exchange_config.instruments.len()
     );
     tracing::info!(
         "fill_model={:?} max_trade_history={}",

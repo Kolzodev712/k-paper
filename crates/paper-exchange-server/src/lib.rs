@@ -4,6 +4,8 @@
 //! Fully async with tokio multi-thread runtime; no blocking std threads.
 
 pub mod dummy_ob;
+pub mod market_engine;
+pub mod market_runtime;
 pub mod rest;
 pub mod runtime;
 pub mod scenario;
@@ -11,7 +13,12 @@ pub mod session;
 pub mod transport;
 pub mod wire;
 
-use std::sync::Arc;
+use crate::market_runtime::MarketRuntime;
+use crate::scenario::ScenarioLoad;
+use paper_exchange_scenarios::OverlayState;
+use std::collections::HashMap;
+use std::sync::Arc as StdArc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tracing_subscriber::EnvFilter;
 
@@ -44,8 +51,8 @@ pub fn run() {
         .expect("PAPER_EXCHANGE_HOST:PAPER_EXCHANGE_PORT must be valid");
 
     let exchange_config = settings.exchange_config.clone();
-    let dummy_ob = settings.dummy_ob.clone();
-    let scenario_path = settings.scenario_path.clone();
+    let market_engine = settings.market_engine.clone();
+    let scenario = settings.scenario.clone();
     let scenario_interval_ms = settings.scenario_interval_ms;
 
     tokio::runtime::Builder::new_multi_thread()
@@ -61,22 +68,37 @@ pub fn run() {
                 rest_query_rx,
             );
 
-            if let Some(cfg) = dummy_ob {
-                dummy_ob::spawn_dummy_ob(cfg, dummy_command_tx.clone());
+            let market_runtime = Arc::new(Mutex::new(MarketRuntime {
+                instruments: HashMap::new(),
+                overlay: OverlayState::default(),
+            }));
+
+            if let Some(cfg) = market_engine {
+                market_engine::spawn_market_engine(
+                    cfg,
+                    market_runtime.clone(),
+                    dummy_command_tx.clone(),
+                );
             }
 
-            if let Some(path) = scenario_path {
-                scenario::spawn_scenario(
-                    path,
-                    scenario_interval_ms,
-                    user_command_tx.clone(),
-                    dummy_command_tx,
-                );
+            match scenario {
+                Some(ScenarioLoad::Overlay(timeline)) => {
+                    scenario::spawn_overlay_timeline(timeline, market_runtime);
+                }
+                Some(ScenarioLoad::Static(path)) => {
+                    scenario::spawn_static_scenario(
+                        path,
+                        scenario_interval_ms,
+                        user_command_tx.clone(),
+                        dummy_command_tx,
+                    );
+                }
+                None => {}
             }
 
             tokio::task::yield_now().await;
 
-            let state = Arc::new(transport::AppState {
+            let state = StdArc::new(transport::AppState {
                 user_command_tx,
                 snapshot_tx,
                 rest_query_tx,
@@ -103,21 +125,21 @@ pub fn run() {
 }
 
 async fn ws_handler_with_state(
-    axum::extract::State(state): axum::extract::State<Arc<transport::AppState>>,
+    axum::extract::State(state): axum::extract::State<StdArc<transport::AppState>>,
     ws: axum::extract::ws::WebSocketUpgrade,
 ) -> axum::response::Response {
     ws.on_upgrade(move |socket| transport::handle_socket(socket, state, true))
 }
 
 async fn ws_handler_market(
-    axum::extract::State(state): axum::extract::State<Arc<transport::AppState>>,
+    axum::extract::State(state): axum::extract::State<StdArc<transport::AppState>>,
     ws: axum::extract::ws::WebSocketUpgrade,
 ) -> axum::response::Response {
     ws.on_upgrade(move |socket| transport::handle_socket(socket, state, false))
 }
 
 async fn ws_handler_trade(
-    axum::extract::State(state): axum::extract::State<Arc<transport::AppState>>,
+    axum::extract::State(state): axum::extract::State<StdArc<transport::AppState>>,
     ws: axum::extract::ws::WebSocketUpgrade,
 ) -> axum::response::Response {
     ws.on_upgrade(move |socket| transport::handle_socket(socket, state, true))

@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 paper-exchange-core = { path = "../paper-exchange-core" }
+paper-exchange-scenarios = { path = "../paper-exchange-scenarios" }
 chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.7", features = ["json", "ws"] }

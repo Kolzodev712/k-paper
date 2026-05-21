@@ -32,18 +32,20 @@ audit:
     # Run cargo audit to check for security vulnerabilities
     cargo audit
 
-# Testing
+# Testing (integration tests bind fixed ports — use single thread)
 test:
-    # Run all unit tests
+    cargo test --all -- --test-threads=1
+
+test-unit:
     cargo test --lib --all-features
 
 test-integration:
-    # Run integration tests (tests/*.rs)
-    cargo test --tests --all-features -- --test-threads=1
+    cargo test -p paper-exchange-server --test integration -- --test-threads=1
 
-test-all:
-    # Run all tests (unit + integration)
-    cargo test --all-features -- --test-threads=1
+test-scenarios:
+    cargo test -p paper-exchange-scenarios
+
+test-all: test
 
 test-bin:
     # Run main system binary (k-paper)
@@ -72,16 +74,12 @@ build-bin:
 
 # Full CI check (what CI runs)
 ci:
-    # Run all CI checks locally
     just fmt-check
     just clippy-strict
     just check
     just test
-    just test-integration
 
-# Quick check (format, clippy, test)
 quick:
-    # Quick local checks before committing
     just fmt-check
     just clippy
     just test
