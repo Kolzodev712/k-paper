@@ -51,6 +51,14 @@ test-bin:
     # Run main system binary (k-paper)
     cargo run --bin k-paper
 
+# Run paper exchange on default port 19999
+run:
+    cargo run -p paper-exchange-server
+
+kill-paper:
+    -fuser -k 19999/tcp 2>/dev/null || true
+    -pkill -9 -f target/debug/paper-exchange-server 2>/dev/null || true
+
 # Compilation checks
 check:
     # Check that all packages compile without building

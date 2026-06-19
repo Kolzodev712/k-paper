@@ -12,7 +12,7 @@ WebSocket API for **orders and account state**: place, cancel, amend orders and 
 ws://<host>:<port>/ws/trade
 ```
 
-- **Port:** Set `PAPER_EXCHANGE_PORT` when starting the server (e.g. `19999`). Default `0` = OS-assigned.
+- **Port:** Default `19999` (`PAPER_EXCHANGE_PORT`). Override when needed.
 - **Path:** Use **`/ws/trade`** for trading (orders, executions, acks, snapshot). Alternatively `/ws` provides the same behavior; `/ws/trade` makes it explicit that this connection is for trading and will receive all execution/ack messages.
 
 ---

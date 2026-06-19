@@ -41,10 +41,7 @@ pub fn run() {
     let (snapshot_tx, snapshot_rx) = mpsc::unbounded_channel();
     let (rest_query_tx, rest_query_rx) = mpsc::unbounded_channel();
 
-    let port = std::env::var("PAPER_EXCHANGE_PORT")
-        .ok()
-        .and_then(|p| p.parse::<u16>().ok())
-        .unwrap_or(0);
+    let port = runtime::listen_port();
     let host = std::env::var("PAPER_EXCHANGE_HOST").unwrap_or_else(|_| "127.0.0.1".into());
     let addr: std::net::SocketAddr = format!("{}:{}", host, port)
         .parse()

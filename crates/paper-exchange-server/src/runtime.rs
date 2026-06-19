@@ -7,6 +7,17 @@ use paper_exchange_core::types::Instrument;
 use serde::Deserialize;
 use std::path::PathBuf;
 
+/// Default HTTP/WS listen port when `PAPER_EXCHANGE_PORT` is unset (fixed, not ephemeral).
+pub const DEFAULT_PAPER_EXCHANGE_PORT: u16 = 19999;
+
+/// Resolve bind port from `PAPER_EXCHANGE_PORT` or [`DEFAULT_PAPER_EXCHANGE_PORT`].
+pub fn listen_port() -> u16 {
+    std::env::var("PAPER_EXCHANGE_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(DEFAULT_PAPER_EXCHANGE_PORT)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RuntimeProfile {
     /// Scripted scenario and/or no random dummy OB (deterministic-friendly).

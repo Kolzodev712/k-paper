@@ -12,14 +12,14 @@ WebSocket API for **orderbooks** and **public trades**. Use this when integratin
 ws://<host>:<port>/ws/market
 ```
 
-- **Port:** Set `PAPER_EXCHANGE_PORT` when starting the server (e.g. `19999`). Default `0` = OS-assigned.
+- **Port:** Default `19999` (`PAPER_EXCHANGE_PORT`). Override when needed.
 - **Path:** Use **`/ws/market`** for market data only (orderbook + public_trade; no snapshot, no commands). Alternatively `/ws` also delivers market data but includes trading messages; prefer `/ws/market` for read-only feeds.
 
 To get a continuous stream of synthetic data, start the server in **dev** profile (see [DEV-GUIDE.md](DEV-GUIDE.md)):
 
 ```bash
 export PAPER_EXCHANGE_PROFILE=dev
-export PAPER_EXCHANGE_PORT=19999   # optional
+export PAPER_EXCHANGE_PORT=19999   # default if unset
 cargo run -p paper-exchange-server
 ```
 

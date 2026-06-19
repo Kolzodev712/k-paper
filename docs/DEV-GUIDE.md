@@ -50,7 +50,7 @@ Best for local development and manual testing.
 
 ```bash
 export PAPER_EXCHANGE_PROFILE=dev
-export PAPER_EXCHANGE_PORT=19999   # optional fixed port
+export PAPER_EXCHANGE_PORT=19999   # default if unset; override only when needed
 cargo run -p paper-exchange-server
 ```
 
@@ -117,7 +117,7 @@ With `immediate_cross` (default), aggressive limits fill as soon as the book cro
 | `PAPER_EXCHANGE_SCENARIO_INTERVAL_MS` | `0` | Sleep between scenario events (ms) |
 | `PAPER_EXCHANGE_SEED` | — | RNG seed for dummy OB (overrides YAML `dummy_ob.seed`) |
 | `PAPER_EXCHANGE_HOST` | `127.0.0.1` | Bind host |
-| `PAPER_EXCHANGE_PORT` | `0` | Bind port (`0` = OS assigns ephemeral port) |
+| `PAPER_EXCHANGE_PORT` | `19999` | Bind port (same every run unless overridden) |
 
 Logging: standard `RUST_LOG` / tracing, e.g. `RUST_LOG=paper_exchange_server=debug`.
 
