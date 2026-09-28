@@ -1,6 +1,6 @@
 # Prop trading integration guide for K-paper
 
-**Status:** Increment 7 linear contract is implemented locally. Increment 6 remains accepted. Matching `trading_system` SHAs are recorded in that repo's plan section 62. UI proto was unchanged (`028ea16`). Candidate #2 remains an operational baseline, not validated alpha. The full section 49 matrix remains Increment 9A.
+**Status:** Increment 9 runner ledger is accepted in `trading_system` (k-paper unchanged). Increment 7 linear contract remains implemented. Increment 6 remains accepted. Candidate #2 remains an operational baseline, not validated alpha. The full section 49 matrix remains Increment 9A.
 
 **Primary plan:** [Prop Trading Productionization and Research Architecture Plan](https://github.com/Kolzodev712/trading_system/blob/master/docs/PROP_TRADING_RESEARCH_AND_PRODUCTION_PLAN.md), especially sections 6, 48–49 and Increments 5R, 5B, 6, 7 and 9A.
 
@@ -69,6 +69,12 @@ Add the narrow Paper-side query and fault hooks needed by the real runner to tes
 Load the linear profile with `PAPER_EXCHANGE_CONFIG=config/linear-btcusdt.yaml`. Default `config/instruments.yaml` stays spot so existing Spot tests remain valid. `GET /positions` is the independent REST snapshot; private `Position` events fire on linear fills.
 
 **Increment 7 result:** `cargo test -p paper-exchange-core`: 15 passed (linear open IM lock without BTC, reduce-only flatten, reduce-only cannot short, one-way naked sell rejected; Increment 6 lookup/suppress tests still pass). `cargo check -p paper-exchange-server`: ok. Matching runner tests in `trading_system` cover PositionSyncPending / fill+position non-double-count and duplicate-pair reject. Intentional Paper/Bybit differences: isolated one-way only, no liquidation engine, fixture funding not interval funding, IM = notional/leverage with no Bybit IM table, UPnL mark = last fill, Paper process restart still loses the account.
+
+## Increment 9 — runner execution ledger (no Paper protocol change)
+
+The durable fill/fee/funding ledger and daily-loss accounting live in `trading_system`. K-paper already emits execution `fee` on fills and exposes fixture `apply_funding` (rate from the linear YAML, not an 8h clock). This increment did not change the Paper wire contract.
+
+**Increment 9 result:** k-paper unchanged at `c2466dc64a274a5b164fb7bcf2005bacb71b7c18`. Runner ledger tests and UI simulation label are recorded in `trading_system` plan section 64.
 
 ## Increment 9A — deterministic fault laboratory
 
