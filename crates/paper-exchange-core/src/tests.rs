@@ -610,3 +610,113 @@ fn stale_book_ages_injected_snapshot() {
         other => panic!("expected orderbook, got {other:?}"),
     }
 }
+
+#[test]
+fn partial_next_fill_leaves_working_remainder() {
+    let (mut exchange, _, _) = PaperExchange::new(linear_config());
+    exchange
+        .inject_orderbook(linear_book("50000", "49900"))
+        .unwrap();
+    exchange.partial_next_fill(decimal("0.001"));
+    let order = exchange
+        .place_order(OrderRequest {
+            instrument_id: InstrumentId::new("BTC-USDT"),
+            side: Side::Buy,
+            order_type: OrderType::Limit,
+            quantity: decimal("0.002"),
+            limit_price: Some(decimal("50000")),
+            client_order_id: Some(ClientOrderId("pf-1".into())),
+            reduce_only: false,
+        })
+        .unwrap();
+    assert_eq!(order.status, OrderStatus::PartiallyFilled);
+    assert_eq!(order.filled_qty, decimal("0.001"));
+    let (_, positions) = exchange.get_snapshot_data();
+    assert_eq!(positions[0].quantity, decimal("0.001"));
+}
+
+#[test]
+fn position_before_fill_emits_position_first() {
+    let (mut exchange, _, mut private_rx) = PaperExchange::new(linear_config());
+    exchange
+        .inject_orderbook(linear_book("50000", "49900"))
+        .unwrap();
+    while private_rx.try_recv().is_ok() {}
+    exchange.emit_position_before_fill();
+    exchange
+        .place_order(OrderRequest {
+            instrument_id: InstrumentId::new("BTC-USDT"),
+            side: Side::Buy,
+            order_type: OrderType::Limit,
+            quantity: decimal("0.001"),
+            limit_price: Some(decimal("50000")),
+            client_order_id: Some(ClientOrderId("ord-pos-first".into())),
+            reduce_only: false,
+        })
+        .unwrap();
+    let mut kinds = Vec::new();
+    while let Ok(ev) = private_rx.try_recv() {
+        match ev.payload {
+            PrivateEvent::Position(_) => kinds.push("position"),
+            PrivateEvent::Execution(e) if e.quantity > Decimal::ZERO => kinds.push("fill"),
+            _ => {}
+        }
+    }
+    let pos = kinds
+        .iter()
+        .position(|k| *k == "position")
+        .expect("position");
+    let fill = kinds.iter().position(|k| *k == "fill").expect("fill");
+    assert!(pos < fill, "kinds={kinds:?}");
+}
+
+#[test]
+fn emit_ws_position_does_not_change_rest_account() {
+    let (mut exchange, _, mut private_rx) = PaperExchange::new(linear_config());
+    let (_, rest_before) = exchange.get_snapshot_data();
+    assert!(rest_before.is_empty());
+    exchange.emit_ws_position(decimal("1"), decimal("50000"));
+    let (_, rest_after) = exchange.get_snapshot_data();
+    assert!(rest_after.is_empty());
+    let ev = private_rx.try_recv().expect("ws position");
+    match ev.payload {
+        PrivateEvent::Position(p) => assert_eq!(p.quantity, decimal("1")),
+        other => panic!("expected position, got {other:?}"),
+    }
+}
+
+#[test]
+fn drop_next_place_is_consumed_without_booking() {
+    let (mut exchange, _, _) = PaperExchange::new(test_config());
+    exchange.drop_next_place();
+    assert!(exchange.take_drop_next_place());
+    assert!(!exchange.take_drop_next_place());
+}
+
+#[test]
+fn lab_fill_open_partial_then_cancel_remainder() {
+    let (mut exchange, _, _) = PaperExchange::new(linear_config());
+    exchange
+        .inject_orderbook(linear_book("50000", "49900"))
+        .unwrap();
+    exchange.partial_next_fill(decimal("0.001"));
+    let placed = exchange
+        .place_order(OrderRequest {
+            instrument_id: InstrumentId::new("BTC-USDT"),
+            side: Side::Buy,
+            order_type: OrderType::Limit,
+            quantity: decimal("0.002"),
+            limit_price: Some(decimal("50000")),
+            client_order_id: Some(ClientOrderId("race-1".into())),
+            reduce_only: false,
+        })
+        .unwrap();
+    assert_eq!(placed.status, OrderStatus::PartiallyFilled);
+    let cancelled = exchange
+        .cancel_order(CancelRequest::ByOrderId(placed.order_id))
+        .unwrap();
+    assert_eq!(cancelled.status, OrderStatus::Canceled);
+    let (_, positions) = exchange.get_snapshot_data();
+    assert_eq!(positions[0].quantity, decimal("0.001"));
+    assert!(exchange.get_open_orders(None).is_empty());
+}

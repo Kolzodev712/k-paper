@@ -33,6 +33,12 @@ pub struct PaperExchange {
     duplicate_next_fill: bool,
     /// When set, injected orderbooks are stamped `now - age` so the runner sees stale MD.
     stale_book_age_secs: Option<i64>,
+    /// One-shot lab fault: swallow the next place with no book and no WS reply.
+    drop_next_place: bool,
+    /// One-shot lab fault: cap the next fill quantity (partial fill).
+    partial_next_qty: Option<Decimal>,
+    /// One-shot lab fault: emit Position before Execution on the next fill.
+    position_before_fill: bool,
 }
 
 impl PaperExchange {
@@ -67,6 +73,9 @@ impl PaperExchange {
             reject_next: None,
             duplicate_next_fill: false,
             stale_book_age_secs: None,
+            drop_next_place: false,
+            partial_next_qty: None,
+            position_before_fill: false,
         };
         (exchange, market_rx, private_rx)
     }
@@ -123,7 +132,12 @@ impl PaperExchange {
             .collect();
         for order in open {
             let book = self.orderbook.get(&order.instrument_id);
-            if let Some(fill) = try_fill(&order, book, &self.config.fill_model) {
+            if let Some(mut fill) = try_fill(&order, book, &self.config.fill_model) {
+                if let Some(cap) = self.partial_next_qty.take() {
+                    if cap > Decimal::ZERO && cap < fill.quantity {
+                        fill.quantity = cap;
+                    }
+                }
                 self.apply_fill(&order, &fill)?;
             }
         }
@@ -204,11 +218,18 @@ impl PaperExchange {
             let drop = self.trades.len() - cap;
             self.trades.drain(0..drop);
         }
-        self.send_private(PrivateEvent::Execution(exec.clone()));
-        if self.duplicate_next_fill {
+        let duplicate = if self.duplicate_next_fill {
             self.duplicate_next_fill = false;
-            self.send_private(PrivateEvent::Execution(exec));
-        }
+            true
+        } else {
+            false
+        };
+        let position_first = if self.position_before_fill {
+            self.position_before_fill = false;
+            true
+        } else {
+            false
+        };
 
         let pt = PublicTrade {
             instrument_id: order.instrument_id.clone(),
@@ -218,24 +239,43 @@ impl PaperExchange {
             timestamp: now,
             trade_id,
         };
-        self.send_market(MarketDataEvent::PublicTrade(pt));
-
-        for bal in self.account.get_all_balances() {
-            self.send_private(PrivateEvent::Balance(bal));
-        }
-        for pos in self.account.get_all_positions() {
-            self.send_private(PrivateEvent::Position(pos));
-        }
+        let balances: Vec<Balance> = self.account.get_all_balances();
+        let mut positions: Vec<Position> = self.account.get_all_positions();
         if linear && self.account.get_position(&order.instrument_id).is_none() {
             // Account drops flat rows; still emit qty=0 so the runner can clear TSM.
-            self.send_private(PrivateEvent::Position(Position {
+            positions.push(Position {
                 instrument_id: order.instrument_id.clone(),
                 side: order.side.clone(),
                 quantity: Decimal::ZERO,
                 entry_price: Decimal::ZERO,
                 unrealized_pnl: Some(Decimal::ZERO),
-            }));
+            });
         }
+
+        let emit_private_account =
+            |exchange: &mut Self, balances: &[Balance], positions: &[Position]| {
+                for bal in balances {
+                    exchange.send_private(PrivateEvent::Balance(bal.clone()));
+                }
+                for pos in positions {
+                    exchange.send_private(PrivateEvent::Position(pos.clone()));
+                }
+            };
+
+        if position_first {
+            emit_private_account(self, &balances, &positions);
+            self.send_private(PrivateEvent::Execution(exec.clone()));
+            if duplicate {
+                self.send_private(PrivateEvent::Execution(exec));
+            }
+        } else {
+            self.send_private(PrivateEvent::Execution(exec.clone()));
+            if duplicate {
+                self.send_private(PrivateEvent::Execution(exec));
+            }
+            emit_private_account(self, &balances, &positions);
+        }
+        self.send_market(MarketDataEvent::PublicTrade(pt));
 
         Ok(())
     }
@@ -350,6 +390,86 @@ impl PaperExchange {
         self.stale_book_age_secs = Some(age_secs.max(0));
     }
 
+    /// Next place is dropped: not booked, no ACK, no reject.
+    pub fn drop_next_place(&mut self) {
+        self.drop_next_place = true;
+    }
+
+    /// Consume the drop-next-place flag if armed.
+    pub fn take_drop_next_place(&mut self) -> bool {
+        let armed = self.drop_next_place;
+        self.drop_next_place = false;
+        armed
+    }
+
+    /// Cap the next fill quantity so the order remains working.
+    pub fn partial_next_fill(&mut self, qty: Decimal) {
+        self.partial_next_qty = Some(qty);
+    }
+
+    /// Emit Position before Execution on the next fill.
+    pub fn emit_position_before_fill(&mut self) {
+        self.position_before_fill = true;
+    }
+
+    /// Broadcast a Position on the private stream without changing REST account state.
+    pub fn emit_ws_position(&mut self, quantity: Decimal, entry_price: Decimal) {
+        let instrument_id = self
+            .config
+            .instruments
+            .first()
+            .map(|i| i.id.clone())
+            .unwrap_or_else(|| InstrumentId::new("BTC-USDT"));
+        self.send_private(PrivateEvent::Position(Position {
+            instrument_id,
+            side: if quantity < Decimal::ZERO {
+                Side::Sell
+            } else {
+                Side::Buy
+            },
+            quantity,
+            entry_price,
+            unrealized_pnl: Some(Decimal::ZERO),
+        }));
+    }
+
+    /// Fill `qty` of the first open order against the current book price.
+    pub fn lab_fill_open(&mut self, qty: Decimal) -> Result<Order, ExchangeError> {
+        let order = self
+            .order_manager
+            .open_orders()
+            .into_iter()
+            .next()
+            .cloned()
+            .ok_or_else(|| ExchangeError::Validation("no open order to fill".into()))?;
+        let remaining = order.quantity - order.filled_qty;
+        if remaining <= Decimal::ZERO {
+            return Err(ExchangeError::Validation(
+                "open order has no remaining qty".into(),
+            ));
+        }
+        let fill_qty = if qty > Decimal::ZERO {
+            qty.min(remaining)
+        } else {
+            remaining
+        };
+        let book = self.orderbook.get(&order.instrument_id);
+        let price = match order.side {
+            Side::Buy => book.and_then(|b| b.best_ask()).unwrap_or(order.price),
+            Side::Sell => book.and_then(|b| b.best_bid()).unwrap_or(order.price),
+        };
+        let fill = Fill {
+            price,
+            quantity: fill_qty,
+            fee: Decimal::ZERO,
+        };
+        self.apply_fill(&order, &fill)?;
+        self.order_manager
+            .get_order(order.order_id)
+            .cloned()
+            .ok_or_else(|| ExchangeError::Validation("filled order missing".into()))
+    }
+
     /// Clear one-shot lab faults so a later fixture cannot inherit them.
     pub fn reset_lab_faults(&mut self) {
         self.suppress_place_ack.clear();
@@ -357,6 +477,9 @@ impl PaperExchange {
         self.reject_next = None;
         self.duplicate_next_fill = false;
         self.stale_book_age_secs = None;
+        self.drop_next_place = false;
+        self.partial_next_qty = None;
+        self.position_before_fill = false;
     }
 
     /// Return trade executions (fills only), optionally filtered by instrument_id and limited to the last N.

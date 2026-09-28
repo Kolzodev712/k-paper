@@ -376,3 +376,112 @@ pub async fn post_disconnect_clients(
         .send(crate::wire::BroadcastEvent::LabDisconnect);
     Ok(StatusCode::NO_CONTENT)
 }
+
+pub async fn post_drop_next_place(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> Result<StatusCode, StatusCode> {
+    let (tx, rx) = oneshot::channel();
+    if state
+        .rest_query_tx
+        .send(RestQuery::DropNextPlace { reply: tx })
+        .is_err()
+    {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    rx.await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct QtyBody {
+    #[serde(default)]
+    pub qty: Option<Decimal>,
+}
+
+pub async fn post_partial_next_fill(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(body): Json<QtyBody>,
+) -> Result<StatusCode, StatusCode> {
+    let (tx, rx) = oneshot::channel();
+    if state
+        .rest_query_tx
+        .send(RestQuery::PartialNextFill {
+            qty: body.qty.unwrap_or(Decimal::new(1, 3)),
+            reply: tx,
+        })
+        .is_err()
+    {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    rx.await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn post_position_before_fill(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> Result<StatusCode, StatusCode> {
+    let (tx, rx) = oneshot::channel();
+    if state
+        .rest_query_tx
+        .send(RestQuery::PositionBeforeFill { reply: tx })
+        .is_err()
+    {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    rx.await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct EmitWsPositionBody {
+    #[serde(default)]
+    pub quantity: Option<Decimal>,
+    #[serde(default)]
+    pub entry_price: Option<Decimal>,
+}
+
+pub async fn post_emit_ws_position(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(body): Json<EmitWsPositionBody>,
+) -> Result<StatusCode, StatusCode> {
+    let (tx, rx) = oneshot::channel();
+    if state
+        .rest_query_tx
+        .send(RestQuery::EmitWsPosition {
+            quantity: body.quantity.unwrap_or(Decimal::ONE),
+            entry_price: body.entry_price.unwrap_or(Decimal::new(50000, 0)),
+            reply: tx,
+        })
+        .is_err()
+    {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    rx.await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn post_lab_fill_open(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(body): Json<QtyBody>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let (tx, rx) = oneshot::channel();
+    if state
+        .rest_query_tx
+        .send(RestQuery::LabFillOpen {
+            qty: body.qty.unwrap_or(Decimal::ZERO),
+            reply: tx,
+        })
+        .is_err()
+    {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    match rx.await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)? {
+        Ok(order) => Ok(Json(serde_json::json!({
+            "order_id": order.order_id.0.to_string(),
+            "status": format!("{:?}", order.status),
+            "filled_qty": order.filled_qty.to_string(),
+            "quantity": order.quantity.to_string(),
+        }))),
+        Err(_) => Err(StatusCode::CONFLICT),
+    }
+}

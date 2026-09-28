@@ -101,24 +101,31 @@ fn run_user_command(
     cmd: Command,
 ) {
     match cmd {
-        Command::PlaceOrder(req, mut reply_tx) => match exchange.place_order(req) {
-            Err(e) => {
-                tracing::warn!("place_order error: {:?}", e);
-                if let Some(tx) = reply_tx.take() {
-                    let _ = tx.send(Err(e.to_string()));
-                }
+        Command::PlaceOrder(req, mut reply_tx) => {
+            if exchange.take_drop_next_place() {
+                tracing::warn!("lab drop_next_place: swallowing place without book or reply");
+                let _ = reply_tx.take();
+                return;
             }
-            Ok(_) => {
-                while let Ok(ev) = private_rx.try_recv() {
+            match exchange.place_order(req) {
+                Err(e) => {
+                    tracing::warn!("place_order error: {:?}", e);
                     if let Some(tx) = reply_tx.take() {
-                        if let PrivateEvent::Execution(exec) = ev.payload.clone() {
-                            let _ = tx.send(Ok(exec));
-                        }
+                        let _ = tx.send(Err(e.to_string()));
                     }
-                    let _ = event_tx.send(BroadcastEvent::Private(ev));
+                }
+                Ok(_) => {
+                    while let Ok(ev) = private_rx.try_recv() {
+                        if let Some(tx) = reply_tx.take() {
+                            if let PrivateEvent::Execution(exec) = ev.payload.clone() {
+                                let _ = tx.send(Ok(exec));
+                            }
+                        }
+                        let _ = event_tx.send(BroadcastEvent::Private(ev));
+                    }
                 }
             }
-        },
+        }
         Command::CancelAll(reply_tx) => {
             let cancelled = exchange.cancel_all_orders();
             if let Some(tx) = reply_tx {
@@ -241,6 +248,30 @@ fn handle_rest_query(exchange: &mut PaperExchange, q: RestQuery) {
         RestQuery::StaleOrderbook { age_secs, reply } => {
             exchange.set_stale_book_age_secs(age_secs);
             let _ = reply.send(());
+        }
+        RestQuery::DropNextPlace { reply } => {
+            exchange.drop_next_place();
+            let _ = reply.send(());
+        }
+        RestQuery::PartialNextFill { qty, reply } => {
+            exchange.partial_next_fill(qty);
+            let _ = reply.send(());
+        }
+        RestQuery::PositionBeforeFill { reply } => {
+            exchange.emit_position_before_fill();
+            let _ = reply.send(());
+        }
+        RestQuery::EmitWsPosition {
+            quantity,
+            entry_price,
+            reply,
+        } => {
+            exchange.emit_ws_position(quantity, entry_price);
+            let _ = reply.send(());
+        }
+        RestQuery::LabFillOpen { qty, reply } => {
+            let result = exchange.lab_fill_open(qty).map_err(|e| e.to_string());
+            let _ = reply.send(result);
         }
         RestQuery::Positions(reply) => {
             let positions = exchange.get_snapshot_data().1;

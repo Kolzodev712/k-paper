@@ -141,6 +141,26 @@ pub fn run() {
                     "/test/disconnect_clients",
                     axum::routing::post(rest::post_disconnect_clients),
                 )
+                .route(
+                    "/test/drop_next_place",
+                    axum::routing::post(rest::post_drop_next_place),
+                )
+                .route(
+                    "/test/partial_next_fill",
+                    axum::routing::post(rest::post_partial_next_fill),
+                )
+                .route(
+                    "/test/position_before_fill",
+                    axum::routing::post(rest::post_position_before_fill),
+                )
+                .route(
+                    "/test/emit_ws_position",
+                    axum::routing::post(rest::post_emit_ws_position),
+                )
+                .route(
+                    "/test/lab_fill_open",
+                    axum::routing::post(rest::post_lab_fill_open),
+                )
                 .with_state(state);
 
             let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");

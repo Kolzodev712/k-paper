@@ -61,6 +61,25 @@ pub enum RestQuery {
         age_secs: i64,
         reply: oneshot::Sender<()>,
     },
+    DropNextPlace {
+        reply: oneshot::Sender<()>,
+    },
+    PartialNextFill {
+        qty: rust_decimal::Decimal,
+        reply: oneshot::Sender<()>,
+    },
+    PositionBeforeFill {
+        reply: oneshot::Sender<()>,
+    },
+    EmitWsPosition {
+        quantity: rust_decimal::Decimal,
+        entry_price: rust_decimal::Decimal,
+        reply: oneshot::Sender<()>,
+    },
+    LabFillOpen {
+        qty: rust_decimal::Decimal,
+        reply: oneshot::Sender<Result<Order, String>>,
+    },
 }
 
 pub async fn ws_handler(ws: WebSocketUpgrade, state: Arc<AppState>) -> Response {
