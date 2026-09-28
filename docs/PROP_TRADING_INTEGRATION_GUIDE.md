@@ -1,6 +1,6 @@
 # Prop trading integration guide for K-paper
 
-**Status:** Implementation handoff. Increment 5B is not started and waits for the trading-system 5R verification and trading-system/UI 5A acceptance reports; planned futures and fault capabilities remain future work.
+**Status:** Increment 5B is ready to begin after local 5R/5A acceptance in the primary plan. This is the existing Spot/levels connectivity preflight only; futures and deterministic fault capabilities remain future work.
 
 **Primary plan:** [Prop Trading Productionization and Research Architecture Plan](https://github.com/Kolzodev712/trading_system/blob/master/docs/PROP_TRADING_RESEARCH_AND_PRODUCTION_PLAN.md), especially sections 6, 48–49 and Increments 5R, 5B, 6, 7 and 9A.
 
@@ -35,7 +35,7 @@ Current `runtime.rs` defaults to port **19999**. The checked-in `config/instrume
 
 ## Increment 5B — connectivity preflight
 
-Begin only after the primary plan's 5R and 5A gates close. The Spot/levels runner must emit authoritative Paper/local venue and execution-mode status to the browser; `UNKNOWN` defaults cannot satisfy this smoke test.
+The primary plan's 5R and 5A local gates are accepted for this limited preflight. The Spot/levels runner must emit authoritative Paper/local venue and execution-mode status to the browser; `UNKNOWN` defaults cannot satisfy this smoke test.
 
 Use the existing Spot/levels sample and [trading-system local guide](https://github.com/Kolzodev712/trading_system/blob/master/docs/LOCAL_DEV_GUIDE.md). Start K-paper on a known port, then the runner and browser UI. Verify:
 
