@@ -1,6 +1,6 @@
 # Prop trading integration guide for K-paper
 
-**Status:** Increment 6 Paper recovery hooks are implemented locally. Client-order-ID lookup covers working and terminal orders; `POST /test/suppress_place_ack` drops the next place ACK while keeping the order. Isolated `paper-exchange-core` tests passed (6/6), including `client_order_id_lookup_includes_canceled` and `suppress_place_ack_keeps_working_order`. Stop for review before Increment 7. Futures and the full deterministic fault matrix remain future work.
+**Status:** Increment 6 Paper recovery hooks are implemented locally at k-paper `ed9568b`, matching `trading_system` `c16a7be`. UI proto was unchanged (`028ea16`). Client-order-ID lookup covers working and terminal orders; `POST /test/suppress_place_ack` drops the next place ACK while keeping the order. Isolated `paper-exchange-core` tests passed (6/6), including `client_order_id_lookup_includes_canceled` and `suppress_place_ack_keeps_working_order`. Stop for review before Increment 7. Futures and the full deterministic fault matrix remain future work.
 
 **Primary plan:** [Prop Trading Productionization and Research Architecture Plan](https://github.com/Kolzodev712/trading_system/blob/master/docs/PROP_TRADING_RESEARCH_AND_PRODUCTION_PLAN.md), especially sections 6, 48–49 and Increments 5R, 5B, 6, 7 and 9A.
 
