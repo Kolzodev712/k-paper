@@ -1,0 +1,38 @@
+# One-way USDT-linear BTCUSDT test contract (Increment 7).
+# Spot `config/instruments.yaml` is unchanged. Load with:
+#   PAPER_EXCHANGE_CONFIG=config/linear-btcusdt.yaml
+#
+# Explicit parameters (not silent Bybit defaults):
+#   leverage 10, taker_fee_bps 6, funding_rate 0 until a ledger fixture sets it.
+instruments:
+  - id: BTC-USDT
+    symbol: BTC-USDT
+    base_asset: BTC
+    quote_asset: USDT
+    tick_size: 0.01
+    lot_size: 0.001
+    min_notional: 10
+    instrument_type: futures
+initial_balances:
+  - asset: USDT
+    amount: 10000000
+linear:
+  leverage: 10
+  taker_fee_bps: 6
+  funding_rate: "0"
+fill_model:
+  kind: immediate_cross
+  slippage_bps: 0
+  fee_bps: 0
+  partial_fills: false
+max_trade_history: 10000
+market:
+  interval_ms: 500
+  seed: null
+  step: 100
+  spread_half: 50
+  levels: 5
+  trade_probability: 0.2
+  instruments:
+    - id: BTC-USDT
+      initial_mid: 50000

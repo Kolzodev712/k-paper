@@ -2,6 +2,7 @@
 
 use crate::config::Config;
 use crate::error::ExchangeError;
+use crate::linear::{check_reduce_only, initial_margin, instrument_is_linear, taker_fee};
 use crate::types::{OrderRequest, Side};
 use rust_decimal::Decimal;
 use std::ops::Rem;
@@ -11,6 +12,7 @@ pub fn validate_order_request(
     order: &OrderRequest,
     quote_available: Decimal,
     base_available: Decimal,
+    position_qty: Decimal,
 ) -> Result<(), ExchangeError> {
     let instrument = config
         .instruments
@@ -18,7 +20,6 @@ pub fn validate_order_request(
         .find(|i| i.id.0 == order.instrument_id.0)
         .ok_or_else(|| ExchangeError::InvalidInstrument(order.instrument_id.0.clone()))?;
 
-    // Tick size: price must be multiple of tick_size (or reject). We round to tick and check equality.
     if let Some(limit_price) = order.limit_price {
         if limit_price < Decimal::ZERO {
             return Err(ExchangeError::Validation("price must be positive".into()));
@@ -34,7 +35,6 @@ pub fn validate_order_request(
         }
     }
 
-    // Lot size: quantity multiple of lot_size
     if order.quantity <= Decimal::ZERO {
         return Err(ExchangeError::Validation(
             "quantity must be positive".into(),
@@ -50,7 +50,6 @@ pub fn validate_order_request(
         }
     }
 
-    // Min notional: for limit orders price * quantity >= min_notional; for market we check at fill time
     let notional = order.limit_price.unwrap_or(Decimal::ZERO) * order.quantity;
     if order.limit_price.is_some() && notional < instrument.min_notional {
         return Err(ExchangeError::Validation(format!(
@@ -59,12 +58,38 @@ pub fn validate_order_request(
         )));
     }
 
-    // Balance: for buy need quote (quantity * price) available; for sell need base (quantity) available
+    if instrument_is_linear(instrument) {
+        let linear = config.linear.as_ref().ok_or_else(|| {
+            ExchangeError::Validation(
+                "futures instrument requires explicit linear contract parameters".into(),
+            )
+        })?;
+        if order.reduce_only {
+            check_reduce_only(position_qty, &order.side, order.quantity)?;
+        } else if matches!(order.side, Side::Sell) && position_qty <= Decimal::ZERO {
+            return Err(ExchangeError::Validation(
+                "one-way linear: cannot open or enlarge a short".into(),
+            ));
+        }
+        let price = order.limit_price.unwrap_or(Decimal::ZERO);
+        if !order.reduce_only {
+            let im = initial_margin(order.quantity * price, linear.leverage)?;
+            let fee = taker_fee(order.quantity * price, linear.taker_fee_bps);
+            if order.order_type == crate::types::OrderType::Market {
+                if quote_available <= Decimal::ZERO {
+                    return Err(ExchangeError::InsufficientBalance);
+                }
+            } else if quote_available < im + fee {
+                return Err(ExchangeError::InsufficientBalance);
+            }
+        }
+        return Ok(());
+    }
+
     match order.side {
         Side::Buy => {
             let required = order.quantity * order.limit_price.unwrap_or(Decimal::ZERO);
             if order.order_type == crate::types::OrderType::Market {
-                // Market buy: we need at least some quote; exact check at fill time
                 if quote_available <= Decimal::ZERO {
                     return Err(ExchangeError::InsufficientBalance);
                 }

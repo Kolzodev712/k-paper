@@ -200,6 +200,7 @@ fn dispatch_static_event(
                 quantity: decimal(ev.quantity.as_deref().unwrap_or("0")),
                 limit_price: limit,
                 client_order_id: ev.client_order_id.map(ClientOrderId),
+                reduce_only: false,
             };
             user_command_tx
                 .send(Command::PlaceOrder(req, None))

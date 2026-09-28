@@ -1,6 +1,6 @@
 # Prop trading integration guide for K-paper
 
-**Status:** Increment 6 is accepted locally at k-paper `ebf4c90`, matching `trading_system` `ac6fdb3` plus the restart-with-damaged-journal halt test. UI proto was unchanged (`028ea16`). Client-order-ID lookup covers working and terminal orders; `POST /test/suppress_place_ack` drops the next matching place ACK, or the next place of any id when `clientOrderId` is omitted. Isolated `paper-exchange-core` tests passed (7/7). One focused Spot runner restart while Paper retained the accepted order passed locally. Increment 7 (minimum linear contract) is next. Candidate #2 remains an operational baseline, not validated alpha. The full section 49 matrix remains Increment 9A.
+**Status:** Increment 7 linear contract is implemented locally. Increment 6 remains accepted. Matching `trading_system` SHAs are recorded in that repo's plan section 62. UI proto was unchanged (`028ea16`). Candidate #2 remains an operational baseline, not validated alpha. The full section 49 matrix remains Increment 9A.
 
 **Primary plan:** [Prop Trading Productionization and Research Architecture Plan](https://github.com/Kolzodev712/trading_system/blob/master/docs/PROP_TRADING_RESEARCH_AND_PRODUCTION_PLAN.md), especially sections 6, 48–49 and Increments 5R, 5B, 6, 7 and 9A.
 
@@ -27,7 +27,7 @@ The producer and consumer protocol must change together. Record both repository 
 | Available today | Important limit |
 | --- | --- |
 | Single in-memory account; orderbook, orders, simple crossing fills, balance reservation, execution/private events | Fill accounting is spot-style: buys consume quote and credit base; sells consume base and credit quote. Futures position accounting is not implemented by merely setting `instrument_type`. |
-| `/ws/market`, `/ws/trade`, `/balances`, `/open_orders`, `/trades`, `/exchange_info`, `GET /orders/by_client_id/:id` (working and terminal) | No authoritative REST position snapshot. Server restart still loses the account. `404` on client-id lookup is inconclusive, not a rejection. |
+| `/ws/market`, `/ws/trade`, `/balances`, `/open_orders`, `/trades`, `/exchange_info`, `GET /orders/by_client_id/:id`, `GET /positions` | Server restart still loses the account. `404` on client-id lookup is inconclusive, not a rejection. Linear accounting is opt-in via `instrument_type: futures` plus `linear` fixture; default YAML stays spot. |
 | Static startup market scenarios and timed price overlays; seeded synthetic market engine | `POST /test/suppress_place_ack` is a one-shot lab fault for a lost place ACK (`clientOrderId` optional: omit to arm the next place). Other faults (WS disconnect, duplicate/out-of-order private events, REST/WS disagreement, complete scripted partial-fill) remain future work. |
 | Existing Spot/levels integration in `trading_system` | The Paper client there has only one in-flight place/cancel/amend of each kind. It is a useful single-strategy constraint, not a concurrent-request simulator. |
 
@@ -54,14 +54,21 @@ Add the narrow Paper-side query and fault hooks needed by the real runner to tes
 
 ## Increment 7 — minimum linear futures contract
 
-Design only the one-way USDT-linear BTCUSDT behavior required to exercise Candidate #2. Document the chosen accounting rules and exact test fixtures before implementing them:
+**Accounting fixtures (explicit, not silent Bybit defaults):**
 
-- Authoritative signed position (flat/long, with unexpected short detectable), entry basis, collateral/margin, realized/unrealized PnL, fees and controlled funding. A sell that reduces a long must not require a spot BTC balance. Define funding, fee and margin parameters explicitly in fixtures; do not silently borrow a Bybit assumption.
-- Place/fill/partial-fill/cancel/exit transitions update order, account and position consistently; private position events and an independent REST position snapshot agree. Enforce reduce-only so an exit cannot create or enlarge a short.
-- Preserve the Increment 6 client-order-ID lookup and duplicate-ID behavior across the new futures order lifecycle. Absence from `/open_orders` never proves an accepted order was rejected; recovery must work after runner restart while K-paper remains alive.
-- Adapt `trading_system` Paper REST/WS mappings and futures-specific `TradingClient` methods together. Readiness and risk still belong to the runner; do not put strategy-specific logic in this server.
+| Parameter | Fixture |
+| --- | --- |
+| Contract | one-way USDT-linear BTCUSDT (`instrument_type: futures`) |
+| Position qty | signed: long > 0, flat = 0, unexpected short < 0 |
+| Initial margin | `notional / leverage` in USDT (`linear.leverage`, default fixture 10) |
+| Taker fee | `notional * taker_fee_bps / 10000` in USDT (`linear.taker_fee_bps`, fixture 6) |
+| Funding | `apply_funding`: `funding_rate * signed_qty * mark` charged in USDT; rate 0 unless a ledger fixture sets it. Not an 8h clock. |
+| Reduce-only | cannot open or enlarge a short; flatten of a long does not require a BTC wallet balance |
+| Spot path | `instrument_type` omitted/None remains quote/base reservation |
 
-Explicitly list simulator/Bybit differences in the qualification report. K-paper needs enough futures semantics to test the runner; it need not clone every Bybit feature.
+Load the linear profile with `PAPER_EXCHANGE_CONFIG=config/linear-btcusdt.yaml`. Default `config/instruments.yaml` stays spot so existing Spot tests remain valid. `GET /positions` is the independent REST snapshot; private `Position` events fire on linear fills.
+
+**Increment 7 result:** `cargo test -p paper-exchange-core`: 15 passed (linear open IM lock without BTC, reduce-only flatten, reduce-only cannot short, one-way naked sell rejected; Increment 6 lookup/suppress tests still pass). `cargo check -p paper-exchange-server`: ok. Matching runner tests in `trading_system` cover PositionSyncPending / fill+position non-double-count and duplicate-pair reject. Intentional Paper/Bybit differences: isolated one-way only, no liquidation engine, fixture funding not interval funding, IM = notional/leverage with no Bybit IM table, UPnL mark = last fill, Paper process restart still loses the account.
 
 ## Increment 9A — deterministic fault laboratory
 

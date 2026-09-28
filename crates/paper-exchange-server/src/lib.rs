@@ -107,6 +107,7 @@ pub fn run() {
                 .route("/ws/trade", axum::routing::get(ws_handler_trade))
                 .route("/balances", axum::routing::get(rest::get_balances))
                 .route("/open_orders", axum::routing::get(rest::get_open_orders))
+                .route("/positions", axum::routing::get(rest::get_positions))
                 .route("/trades", axum::routing::get(rest::get_trades))
                 .route(
                     "/exchange_info",

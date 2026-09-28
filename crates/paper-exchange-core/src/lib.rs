@@ -9,6 +9,7 @@ pub mod account;
 pub mod config;
 pub mod error;
 pub mod exchange;
+pub mod linear;
 pub mod matching;
 pub mod order_manager;
 pub mod orderbook;

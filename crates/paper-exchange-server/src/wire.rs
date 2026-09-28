@@ -76,6 +76,8 @@ pub struct WireOrderRequest {
     pub limit_price: Option<Decimal>,
     #[serde(default, deserialize_with = "opt_client_order_id_from_string_or_array")]
     pub client_order_id: Option<ClientOrderId>,
+    #[serde(default)]
+    pub reduce_only: bool,
 }
 
 impl From<WireOrderRequest> for OrderRequest {
@@ -87,6 +89,7 @@ impl From<WireOrderRequest> for OrderRequest {
             quantity: w.quantity,
             limit_price: w.limit_price,
             client_order_id: w.client_order_id,
+            reduce_only: w.reduce_only,
         }
     }
 }

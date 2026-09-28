@@ -1,6 +1,7 @@
 //! Configuration: instruments, initial balances, fill model params.
 //! No file I/O in core; callers pass parsed Config.
 
+use crate::linear::LinearContract;
 use crate::types::{Asset, Instrument};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -44,8 +45,11 @@ pub struct Config {
     pub initial_balances: Vec<InitialBalance>,
     pub fill_model: FillModelConfig,
     /// Max fills kept for REST `/trades` (0 = unlimited).
-    #[serde(default = "default_max_trade_history")]
+    #[serde(default)]
     pub max_trade_history: usize,
+    /// When set, instruments with `instrument_type: futures` use one-way USDT-linear accounting.
+    #[serde(default)]
+    pub linear: Option<LinearContract>,
 }
 
 fn default_max_trade_history() -> usize {
@@ -59,6 +63,7 @@ impl Default for Config {
             initial_balances: Vec::new(),
             fill_model: FillModelConfig::default(),
             max_trade_history: default_max_trade_history(),
+            linear: None,
         }
     }
 }

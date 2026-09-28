@@ -1,13 +1,15 @@
 //! Account state: balances (available, locked, total). Reserve on place, release on fill/cancel.
 
-use crate::types::{Asset, Balance, Position, Side};
+use crate::error::ExchangeError;
+use crate::linear::{initial_margin, signed_fill_qty};
+use crate::types::{Asset, Balance, InstrumentId, Position, Side};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, Default)]
 pub struct Account {
     balances: HashMap<Asset, Balance>,
-    positions: HashMap<crate::types::InstrumentId, Position>,
+    positions: HashMap<InstrumentId, Position>,
 }
 
 impl Account {
@@ -45,15 +47,11 @@ impl Account {
     }
 
     /// Reserve (lock) amount of asset for an order. Call on place order.
-    pub fn reserve(
-        &mut self,
-        asset: &Asset,
-        amount: Decimal,
-    ) -> Result<(), crate::error::ExchangeError> {
+    pub fn reserve(&mut self, asset: &Asset, amount: Decimal) -> Result<(), ExchangeError> {
         self.ensure_asset(asset);
         let bal = self.balances.get_mut(asset).unwrap();
         if bal.available < amount {
-            return Err(crate::error::ExchangeError::InsufficientBalance);
+            return Err(ExchangeError::InsufficientBalance);
         }
         bal.available -= amount;
         bal.locked += amount;
@@ -77,6 +75,18 @@ impl Account {
         bal.total += amount;
     }
 
+    /// Debit available (and total) for fees, funding, or negative realized PnL.
+    pub fn debit(&mut self, asset: &Asset, amount: Decimal) -> Result<(), ExchangeError> {
+        self.ensure_asset(asset);
+        let bal = self.balances.get_mut(asset).unwrap();
+        if bal.available < amount {
+            return Err(ExchangeError::InsufficientBalance);
+        }
+        bal.available -= amount;
+        bal.total -= amount;
+        Ok(())
+    }
+
     pub fn get_balance(&self, asset: &Asset) -> Option<&Balance> {
         self.balances.get(asset)
     }
@@ -85,7 +95,7 @@ impl Account {
         self.balances.values().cloned().collect()
     }
 
-    pub fn get_position(&self, instrument_id: &crate::types::InstrumentId) -> Option<&Position> {
+    pub fn get_position(&self, instrument_id: &InstrumentId) -> Option<&Position> {
         self.positions.get(instrument_id)
     }
 
@@ -124,6 +134,99 @@ impl Account {
                 self.release(base_asset, base_amount);
                 self.credit(quote_asset, quote_amount);
             }
+        }
+    }
+
+    /// USDT-linear fill: IM stays in USDT; no base/quote swap. Quantity is signed on the position.
+    pub fn apply_linear_fill(
+        &mut self,
+        quote_asset: &Asset,
+        instrument_id: &InstrumentId,
+        side: Side,
+        price: Decimal,
+        quantity: Decimal,
+        fee: Decimal,
+        reducing: bool,
+        leverage: u32,
+        mark: Decimal,
+    ) -> Result<(), ExchangeError> {
+        if fee > Decimal::ZERO {
+            self.debit(quote_asset, fee)?;
+        }
+
+        let current = self
+            .get_position(instrument_id)
+            .map(|p| (p.quantity, p.entry_price))
+            .unwrap_or((Decimal::ZERO, Decimal::ZERO));
+        let (cur_qty, entry) = current;
+        let delta = signed_fill_qty(&side, quantity);
+        let next_qty = cur_qty + delta;
+
+        if reducing {
+            let closed = quantity.min(cur_qty.abs());
+            let realized = if cur_qty > Decimal::ZERO && matches!(side, Side::Sell) {
+                (price - entry) * closed
+            } else if cur_qty < Decimal::ZERO && matches!(side, Side::Buy) {
+                (entry - price) * closed
+            } else {
+                Decimal::ZERO
+            };
+            let im = initial_margin(closed * entry, leverage).unwrap_or(Decimal::ZERO);
+            self.release(quote_asset, im);
+            if realized > Decimal::ZERO {
+                self.credit(quote_asset, realized);
+            } else if realized < Decimal::ZERO {
+                self.debit(quote_asset, -realized)?;
+            }
+        }
+
+        let new_entry = if !reducing && next_qty.abs() > Decimal::ZERO {
+            if cur_qty == Decimal::ZERO || (cur_qty.is_sign_positive() == delta.is_sign_positive())
+            {
+                let prev_notional = entry * cur_qty.abs();
+                let add_notional = price * quantity;
+                (prev_notional + add_notional) / next_qty.abs()
+            } else {
+                entry
+            }
+        } else if next_qty == Decimal::ZERO {
+            Decimal::ZERO
+        } else {
+            entry
+        };
+
+        let side_out = if next_qty >= Decimal::ZERO {
+            Side::Buy
+        } else {
+            Side::Sell
+        };
+        let upnl = if next_qty == Decimal::ZERO {
+            Decimal::ZERO
+        } else {
+            (mark - new_entry) * next_qty
+        };
+        self.update_position(Position {
+            instrument_id: instrument_id.clone(),
+            side: side_out,
+            quantity: next_qty,
+            entry_price: new_entry,
+            unrealized_pnl: Some(upnl),
+        });
+        Ok(())
+    }
+
+    pub fn apply_funding(
+        &mut self,
+        quote_asset: &Asset,
+        amount: Decimal,
+    ) -> Result<(), ExchangeError> {
+        if amount > Decimal::ZERO {
+            self.credit(quote_asset, amount);
+            Ok(())
+        } else if amount < Decimal::ZERO {
+            self.debit(quote_asset, -amount)
+        } else {
+            Ok(())
         }
     }
 }

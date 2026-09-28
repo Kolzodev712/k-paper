@@ -61,20 +61,45 @@ impl OrderManager {
             .get_balance(&instrument.base_asset)
             .map(|b| b.available)
             .unwrap_or(Decimal::ZERO);
+        let position_qty = account
+            .get_position(&req.instrument_id)
+            .map(|p| p.quantity)
+            .unwrap_or(Decimal::ZERO);
 
-        validate_order_request(&self.config, &req, quote_available, base_available)?;
+        validate_order_request(
+            &self.config,
+            &req,
+            quote_available,
+            base_available,
+            position_qty,
+        )?;
 
         let price = req.limit_price.unwrap_or(Decimal::ZERO);
-
-        let reserve_amount = match req.side {
-            Side::Buy => req.quantity * price,
-            Side::Sell => req.quantity,
-        };
-        let reserve_asset = match req.side {
-            Side::Buy => &instrument.quote_asset,
-            Side::Sell => &instrument.base_asset,
-        };
-        account.reserve(reserve_asset, reserve_amount)?;
+        let linear = crate::linear::instrument_is_linear(instrument);
+        if linear {
+            if !req.reduce_only {
+                let leverage =
+                    self.config
+                        .linear
+                        .as_ref()
+                        .map(|c| c.leverage)
+                        .ok_or_else(|| {
+                            ExchangeError::Validation("linear contract parameters required".into())
+                        })?;
+                let im = crate::linear::initial_margin(req.quantity * price, leverage)?;
+                account.reserve(&instrument.quote_asset, im)?;
+            }
+        } else {
+            let reserve_amount = match req.side {
+                Side::Buy => req.quantity * price,
+                Side::Sell => req.quantity,
+            };
+            let reserve_asset = match req.side {
+                Side::Buy => &instrument.quote_asset,
+                Side::Sell => &instrument.base_asset,
+            };
+            account.reserve(reserve_asset, reserve_amount)?;
+        }
 
         let order_id = crate::types::OrderId::new();
         let order = Order {
@@ -89,6 +114,7 @@ impl OrderManager {
             status: OrderStatus::New,
             created_at: now,
             updated_at: now,
+            reduce_only: req.reduce_only,
         };
 
         self.orders_by_id.insert(order_id, order.clone());
@@ -113,7 +139,7 @@ impl OrderManager {
                 .ok_or(ExchangeError::OrderNotFound)?,
         };
 
-        let (instrument_id, side, quantity, price, filled_qty, _client_order_id) = {
+        let (instrument_id, side, quantity, price, filled_qty, _client_order_id, reduce_only) = {
             let order = self
                 .orders_by_id
                 .get(&order_id)
@@ -134,6 +160,7 @@ impl OrderManager {
                 order.price,
                 order.filled_qty,
                 order.client_order_id.clone(),
+                order.reduce_only,
             )
         };
 
@@ -142,15 +169,24 @@ impl OrderManager {
             .ok_or_else(|| ExchangeError::InvalidInstrument(instrument_id.0.clone()))?;
 
         let released = quantity - filled_qty;
-        let reserve_asset = match side {
-            Side::Buy => &instrument.quote_asset,
-            Side::Sell => &instrument.base_asset,
-        };
-        let release_amount = match side {
-            Side::Buy => released * price,
-            Side::Sell => released,
-        };
-        account.release(reserve_asset, release_amount);
+        if crate::linear::instrument_is_linear(instrument) {
+            if !reduce_only {
+                let leverage = self.config.linear.as_ref().map(|c| c.leverage).unwrap_or(1);
+                let im = crate::linear::initial_margin(released * price, leverage)
+                    .unwrap_or(Decimal::ZERO);
+                account.release(&instrument.quote_asset, im);
+            }
+        } else {
+            let reserve_asset = match side {
+                Side::Buy => &instrument.quote_asset,
+                Side::Sell => &instrument.base_asset,
+            };
+            let release_amount = match side {
+                Side::Buy => released * price,
+                Side::Sell => released,
+            };
+            account.release(reserve_asset, release_amount);
+        }
 
         let order = self.orders_by_id.get_mut(&order_id).unwrap();
         order.status = OrderStatus::Canceled;

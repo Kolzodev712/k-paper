@@ -130,15 +130,42 @@ impl PaperExchange {
         } else {
             OrderStatus::PartiallyFilled
         };
+        let reducing = o.reduce_only;
 
-        self.account.apply_fill(
-            order.side.clone(),
-            &instrument.quote_asset,
-            &instrument.base_asset,
-            fill.price,
-            fill.quantity,
-            fill.fee,
-        );
+        let linear = crate::linear::instrument_is_linear(instrument);
+        let fee = if linear {
+            self.config
+                .linear
+                .as_ref()
+                .map(|c| crate::linear::taker_fee(fill.price * fill.quantity, c.taker_fee_bps))
+                .unwrap_or(fill.fee)
+        } else {
+            fill.fee
+        };
+
+        if linear {
+            let leverage = self.config.linear.as_ref().map(|c| c.leverage).unwrap_or(1);
+            self.account.apply_linear_fill(
+                &instrument.quote_asset,
+                &order.instrument_id,
+                order.side.clone(),
+                fill.price,
+                fill.quantity,
+                fee,
+                reducing,
+                leverage,
+                fill.price,
+            )?;
+        } else {
+            self.account.apply_fill(
+                order.side.clone(),
+                &instrument.quote_asset,
+                &instrument.base_asset,
+                fill.price,
+                fill.quantity,
+                fee,
+            );
+        }
 
         let exec = Execution {
             order_id: order.order_id,
@@ -147,7 +174,7 @@ impl PaperExchange {
             side: order.side.clone(),
             price: fill.price,
             quantity: fill.quantity,
-            fee: Some(fill.fee),
+            fee: Some(fee),
             timestamp: now,
             reject_reason: None,
         };
@@ -172,6 +199,9 @@ impl PaperExchange {
 
         for bal in self.account.get_all_balances() {
             self.send_private(PrivateEvent::Balance(bal));
+        }
+        for pos in self.account.get_all_positions() {
+            self.send_private(PrivateEvent::Position(pos));
         }
 
         Ok(())
@@ -313,5 +343,33 @@ impl PaperExchange {
     pub fn amend_order(&mut self, req: AmendRequest) -> Result<Order, ExchangeError> {
         let now = self.now();
         self.order_manager.amend_order(req, &mut self.account, now)
+    }
+
+    /// Apply one controlled funding settlement: `rate * signed_qty * mark` in quote (USDT).
+    /// Rate comes from the explicit linear fixture (`funding_rate`); this is not an 8h Bybit clock.
+    pub fn apply_funding(
+        &mut self,
+        instrument_id: &InstrumentId,
+        mark: Decimal,
+    ) -> Result<(), ExchangeError> {
+        let instrument = self
+            .config
+            .instruments
+            .iter()
+            .find(|i| &i.id == instrument_id)
+            .ok_or_else(|| ExchangeError::InvalidInstrument(instrument_id.0.clone()))?;
+        let linear = self.config.linear.as_ref().ok_or_else(|| {
+            ExchangeError::Validation("funding requires explicit linear contract parameters".into())
+        })?;
+        let Some(pos) = self.account.get_position(instrument_id).cloned() else {
+            return Ok(());
+        };
+        let amount = linear.funding_rate * pos.quantity * mark;
+        self.account
+            .apply_funding(&instrument.quote_asset, -amount)?;
+        for bal in self.account.get_all_balances() {
+            self.send_private(PrivateEvent::Balance(bal));
+        }
+        Ok(())
     }
 }

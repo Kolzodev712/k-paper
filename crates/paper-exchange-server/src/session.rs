@@ -226,6 +226,10 @@ fn handle_rest_query(exchange: &mut PaperExchange, q: RestQuery) {
             }
             let _ = reply.send(());
         }
+        RestQuery::Positions(reply) => {
+            let positions = exchange.get_snapshot_data().1;
+            let _ = reply.send(positions);
+        }
     }
 }
 

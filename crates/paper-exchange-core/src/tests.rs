@@ -40,6 +40,7 @@ fn test_config() -> Config {
         ],
         fill_model: FillModelConfig::default(),
         max_trade_history: 10_000,
+        linear: None,
     }
 }
 
@@ -108,6 +109,7 @@ fn place_and_fill_limit_order() {
             quantity: decimal("0.5"),
             limit_price: Some(decimal("50100")),
             client_order_id: None,
+            reduce_only: false,
         })
         .unwrap();
 
@@ -155,6 +157,7 @@ fn validation_rejects_unknown_instrument() {
             quantity: decimal("1"),
             limit_price: Some(decimal("50000")),
             client_order_id: None,
+            reduce_only: false,
         })
         .unwrap_err();
 
@@ -191,6 +194,7 @@ fn duplicate_client_order_id_rejected() {
             quantity: decimal("0.1"),
             limit_price: Some(decimal("50100")),
             client_order_id: Some(cid.clone()),
+            reduce_only: false,
         })
         .unwrap();
 
@@ -202,6 +206,7 @@ fn duplicate_client_order_id_rejected() {
             quantity: decimal("0.1"),
             limit_price: Some(decimal("50100")),
             client_order_id: Some(cid),
+            reduce_only: false,
         })
         .unwrap_err();
 
@@ -234,6 +239,7 @@ fn client_order_id_lookup_includes_canceled() {
             quantity: decimal("0.1"),
             limit_price: Some(decimal("40000")),
             client_order_id: Some(cid.clone()),
+            reduce_only: false,
         })
         .unwrap();
     assert_eq!(placed.status, OrderStatus::New);
@@ -275,6 +281,7 @@ fn suppress_place_ack_keeps_working_order() {
             quantity: decimal("0.1"),
             limit_price: Some(decimal("40000")),
             client_order_id: Some(ClientOrderId("lost-ack".into())),
+            reduce_only: false,
         })
         .unwrap();
     assert_eq!(placed.status, OrderStatus::New);
@@ -319,6 +326,7 @@ fn suppress_next_place_ack_any_without_client_id() {
             quantity: decimal("0.1"),
             limit_price: Some(decimal("40000")),
             client_order_id: Some(ClientOrderId("runner-generated".into())),
+            reduce_only: false,
         })
         .unwrap();
     assert_eq!(placed.status, OrderStatus::New);
@@ -338,4 +346,149 @@ fn suppress_next_place_ack_any_without_client_id() {
         .get_order_by_client_id("runner-generated")
         .expect("working order retained");
     assert_eq!(found.status, OrderStatus::New);
+}
+
+fn linear_instrument() -> Instrument {
+    Instrument {
+        id: InstrumentId::new("BTC-USDT"),
+        symbol: "BTC-USDT".to_string(),
+        base_asset: Asset("BTC".to_string()),
+        quote_asset: Asset("USDT".to_string()),
+        tick_size: decimal("0.01"),
+        lot_size: decimal("0.001"),
+        min_notional: decimal("10"),
+        instrument_type: Some(InstrumentType::Futures),
+    }
+}
+
+fn linear_config() -> Config {
+    Config {
+        instruments: vec![linear_instrument()],
+        initial_balances: vec![InitialBalance {
+            asset: Asset("USDT".to_string()),
+            amount: decimal("100000"),
+        }],
+        fill_model: FillModelConfig::default(),
+        max_trade_history: 10_000,
+        linear: Some(crate::linear::LinearContract {
+            leverage: 10,
+            taker_fee_bps: 6,
+            funding_rate: Decimal::ZERO,
+        }),
+    }
+}
+
+fn linear_book(ask: &str, bid: &str) -> OrderbookSnapshot {
+    OrderbookSnapshot {
+        instrument_id: InstrumentId::new("BTC-USDT"),
+        bids: vec![BookLevel {
+            price: decimal(bid),
+            quantity: decimal("2"),
+        }],
+        asks: vec![BookLevel {
+            price: decimal(ask),
+            quantity: decimal("2"),
+        }],
+        sequence: 1,
+        timestamp: Utc::now(),
+    }
+}
+
+#[test]
+fn linear_open_buy_locks_usdt_margin_not_btc() {
+    let (mut exchange, _, _) = PaperExchange::new(linear_config());
+    exchange
+        .inject_orderbook(linear_book("50000", "49900"))
+        .unwrap();
+    let order = exchange
+        .place_order(OrderRequest {
+            instrument_id: InstrumentId::new("BTC-USDT"),
+            side: Side::Buy,
+            order_type: OrderType::Limit,
+            quantity: decimal("0.001"),
+            limit_price: Some(decimal("50000")),
+            client_order_id: Some(ClientOrderId("lin-open".into())),
+            reduce_only: false,
+        })
+        .unwrap();
+    assert_eq!(order.status, OrderStatus::Filled);
+    let (balances, positions) = exchange.get_snapshot_data();
+    assert!(
+        balances.iter().all(|b| b.asset.0 != "BTC"),
+        "linear must not credit spot BTC"
+    );
+    let usdt = balances.iter().find(|b| b.asset.0 == "USDT").unwrap();
+    assert_eq!(usdt.locked, decimal("5"));
+    assert_eq!(positions.len(), 1);
+    assert_eq!(positions[0].quantity, decimal("0.001"));
+}
+
+#[test]
+fn linear_reduce_only_exit_does_not_need_btc() {
+    let (mut exchange, _, _) = PaperExchange::new(linear_config());
+    exchange
+        .inject_orderbook(linear_book("50000", "49900"))
+        .unwrap();
+    exchange
+        .place_order(OrderRequest {
+            instrument_id: InstrumentId::new("BTC-USDT"),
+            side: Side::Buy,
+            order_type: OrderType::Limit,
+            quantity: decimal("0.001"),
+            limit_price: Some(decimal("50000")),
+            client_order_id: Some(ClientOrderId("lin-open2".into())),
+            reduce_only: false,
+        })
+        .unwrap();
+    exchange
+        .inject_orderbook(linear_book("51000", "50000"))
+        .unwrap();
+    let exit = exchange
+        .place_order(OrderRequest {
+            instrument_id: InstrumentId::new("BTC-USDT"),
+            side: Side::Sell,
+            order_type: OrderType::Limit,
+            quantity: decimal("0.001"),
+            limit_price: Some(decimal("50000")),
+            client_order_id: Some(ClientOrderId("lin-exit".into())),
+            reduce_only: true,
+        })
+        .unwrap();
+    assert_eq!(exit.status, OrderStatus::Filled);
+    let (_, positions) = exchange.get_snapshot_data();
+    assert!(positions.is_empty(), "flatten must clear the position");
+}
+
+#[test]
+fn linear_reduce_only_cannot_open_a_short() {
+    let (mut exchange, _, _) = PaperExchange::new(linear_config());
+    let err = exchange
+        .place_order(OrderRequest {
+            instrument_id: InstrumentId::new("BTC-USDT"),
+            side: Side::Sell,
+            order_type: OrderType::Limit,
+            quantity: decimal("0.001"),
+            limit_price: Some(decimal("50000")),
+            client_order_id: Some(ClientOrderId("lin-short".into())),
+            reduce_only: true,
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("reduce-only"));
+}
+
+#[test]
+fn linear_one_way_sell_without_reduce_only_rejected_when_flat() {
+    let (mut exchange, _, _) = PaperExchange::new(linear_config());
+    let err = exchange
+        .place_order(OrderRequest {
+            instrument_id: InstrumentId::new("BTC-USDT"),
+            side: Side::Sell,
+            order_type: OrderType::Limit,
+            quantity: decimal("0.001"),
+            limit_price: Some(decimal("50000")),
+            client_order_id: Some(ClientOrderId("lin-naked".into())),
+            reduce_only: false,
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("short"));
 }

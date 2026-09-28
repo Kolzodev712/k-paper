@@ -39,6 +39,8 @@ struct ExchangeConfigFile {
     /// Legacy section name; merged with `market` if present.
     #[serde(default)]
     dummy_ob: Option<MarketFile>,
+    #[serde(default)]
+    linear: Option<paper_exchange_core::linear::LinearContract>,
 }
 
 fn default_max_trade_history() -> usize {
@@ -131,6 +133,7 @@ pub fn load_settings() -> Result<ServerSettings, Box<dyn std::error::Error + Sen
         initial_balances: file.initial_balances,
         fill_model: file.fill_model,
         max_trade_history: file.max_trade_history,
+        linear: file.linear,
     };
 
     let scenario_spec = std::env::var("PAPER_EXCHANGE_SCENARIO")

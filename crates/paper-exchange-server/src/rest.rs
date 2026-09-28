@@ -22,6 +22,17 @@ pub async fn get_balances(
     Ok(Json(balances))
 }
 
+pub async fn get_positions(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> Result<Json<Vec<paper_exchange_core::types::Position>>, StatusCode> {
+    let (tx, rx) = oneshot::channel();
+    if state.rest_query_tx.send(RestQuery::Positions(tx)).is_err() {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    let positions = rx.await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(positions))
+}
+
 #[derive(Deserialize)]
 pub struct OpenOrdersQuery {
     #[serde(rename = "instrument_id")]

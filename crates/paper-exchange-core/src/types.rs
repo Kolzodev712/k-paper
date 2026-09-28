@@ -114,6 +114,7 @@ impl fmt::Display for Asset {
 // ---------- Instrument ----------
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum InstrumentType {
     Spot,
     Futures,
@@ -170,6 +171,9 @@ pub struct OrderRequest {
     pub quantity: Decimal,
     pub limit_price: Option<Decimal>,
     pub client_order_id: Option<ClientOrderId>,
+    /// Linear only: order may only reduce an existing position.
+    #[serde(default)]
+    pub reduce_only: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -209,6 +213,8 @@ pub struct Order {
     pub status: OrderStatus,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[serde(default)]
+    pub reduce_only: bool,
 }
 
 // ---------- Trades ----------
