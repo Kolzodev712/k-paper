@@ -25,6 +25,8 @@ pub struct PaperExchange {
     private_sequence: u64,
     /// One-shot lab fault: accept the order but do not emit the place ACK execution.
     suppress_place_ack: HashSet<String>,
+    /// One-shot lab fault: suppress the ACK of the next place regardless of client id.
+    suppress_next_any: bool,
 }
 
 impl PaperExchange {
@@ -55,6 +57,7 @@ impl PaperExchange {
             market_sequence: 0,
             private_sequence: 0,
             suppress_place_ack: HashSet::new(),
+            suppress_next_any: false,
         };
         (exchange, market_rx, private_rx)
     }
@@ -176,11 +179,16 @@ impl PaperExchange {
 
     pub fn place_order(&mut self, req: OrderRequest) -> Result<Order, ExchangeError> {
         let now = self.now();
-        let suppress = req
-            .client_order_id
-            .as_ref()
-            .map(|cid| self.suppress_place_ack.remove(&cid.0))
-            .unwrap_or(false);
+        let mut suppress = false;
+        if self.suppress_next_any {
+            self.suppress_next_any = false;
+            suppress = true;
+        }
+        if let Some(cid) = req.client_order_id.as_ref() {
+            if self.suppress_place_ack.remove(&cid.0) {
+                suppress = true;
+            }
+        }
         let order = self
             .order_manager
             .place_order(req, &mut self.account, now)?;
@@ -254,6 +262,11 @@ impl PaperExchange {
     /// Next matching `client_order_id` is accepted on the book but the place ACK is dropped.
     pub fn suppress_next_place_ack(&mut self, client_order_id: String) {
         self.suppress_place_ack.insert(client_order_id);
+    }
+
+    /// Next place, regardless of client id, is accepted but the place ACK is dropped.
+    pub fn suppress_next_place_ack_any(&mut self) {
+        self.suppress_next_any = true;
     }
 
     /// Return trade executions (fills only), optionally filtered by instrument_id and limited to the last N.

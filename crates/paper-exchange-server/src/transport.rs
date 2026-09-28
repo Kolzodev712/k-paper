@@ -43,7 +43,7 @@ pub enum RestQuery {
         reply: oneshot::Sender<Option<Order>>,
     },
     SuppressPlaceAck {
-        client_order_id: String,
+        client_order_id: Option<String>,
         reply: oneshot::Sender<()>,
     },
 }

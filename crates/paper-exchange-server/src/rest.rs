@@ -250,11 +250,11 @@ pub async fn get_order_by_client_id(
 
 #[derive(Deserialize)]
 pub struct SuppressPlaceAckBody {
-    #[serde(rename = "clientOrderId")]
-    pub client_order_id: String,
+    #[serde(default, rename = "clientOrderId")]
+    pub client_order_id: Option<String>,
 }
 
-/// Lab fault hook: next place with this client id is accepted but the ACK is dropped.
+/// Lab fault hook: next matching place (or the next place if id omitted) is accepted but the ACK is dropped.
 pub async fn post_suppress_place_ack(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     Json(body): Json<SuppressPlaceAckBody>,

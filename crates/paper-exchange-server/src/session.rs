@@ -220,7 +220,10 @@ fn handle_rest_query(exchange: &mut PaperExchange, q: RestQuery) {
             client_order_id,
             reply,
         } => {
-            exchange.suppress_next_place_ack(client_order_id);
+            match client_order_id.filter(|id| !id.is_empty()) {
+                Some(id) => exchange.suppress_next_place_ack(id),
+                None => exchange.suppress_next_place_ack_any(),
+            }
             let _ = reply.send(());
         }
     }
