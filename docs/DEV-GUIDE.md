@@ -2,6 +2,8 @@
 
 How to run, configure, and integrate against the paper exchange server. For wire-level message formats, see [CLIENT-INSTRUCTIONS.md](CLIENT-INSTRUCTIONS.md), [API-EXECUTION.md](API-EXECUTION.md), and [API-MARKET-DATA.md](API-MARKET-DATA.md).
 
+For the Candidate #2 cross-repository roadmap and the futures/fault gaps, see [PROP_TRADING_INTEGRATION_GUIDE.md](PROP_TRADING_INTEGRATION_GUIDE.md). The current Spot-oriented server is the starting point, not the finished Paper qualification venue.
+
 ---
 
 ## What you are running
@@ -103,6 +105,8 @@ fill_model:
 ```
 
 With `immediate_cross` (default), aggressive limits fill as soon as the book crosses your price.
+
+The checked-in `config/instruments.yaml` includes a `market` section. With **no static scenario**, `runtime.rs` currently enables its market engine from that config even if `PAPER_EXCHANGE_PROFILE=lab`. For static-only deterministic tests, supply a static scenario and leave `PAPER_EXCHANGE_DUMMY_OB` off; verify the startup log says `market_engine=false`. Profile name alone is not a determinism guarantee.
 
 ---
 
@@ -257,9 +261,9 @@ cargo test --all -- --test-threads=1
 - **Matching:** Incoming orders are checked against the **current injected orderbook** (not a full CLOB of user resting orders). User orders do not rest on the book for others to hit.
 - **Account:** Single paper account; reserves quote on buy, base on sell; release on fill/cancel.
 - **Streams:** Core emits market (orderbook, public trade) and private (execution, balance, position) events; server broadcasts to all WS subscribers and routes command replies to the requesting socket.
-- **Profiles:** `lab` = scenario-driven, deterministic-friendly; `dev` = synthetic moving book for interactive work.
+- **Profiles:** `lab` is intended for scenario-driven tests and `dev` for synthetic moving books; the checked-in `market` config can start the synthetic engine even under `lab` unless a static scenario suppresses it.
 
-Design background: [.cursor/design-log/001-realistic-testing-exchange.md](../.cursor/design-log/001-realistic-testing-exchange.md).
+Design background: [paper-exchange-v1 proposal](../proposals/paper-exchange-v1.md).
 
 ---
 
@@ -272,4 +276,5 @@ Design background: [.cursor/design-log/001-realistic-testing-exchange.md](../.cu
 | [API-EXECUTION.md](API-EXECUTION.md) | Trading WebSocket schema |
 | [API-MARKET-DATA.md](API-MARKET-DATA.md) | Market WebSocket schema |
 | [DESIGN.md](DESIGN.md) | Scenario format reference |
+| [PROP_TRADING_INTEGRATION_GUIDE.md](PROP_TRADING_INTEGRATION_GUIDE.md) | Cross-repo Candidate #2 Paper handoff and qualification gates |
 | [README.md](../README.md) | Repo overview and build |
