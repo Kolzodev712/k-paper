@@ -2,13 +2,15 @@
 
 **Status:** Implementation handoff; planned capabilities below are not present yet.
 
-**Primary plan:** [Prop Trading Productionization and Research Architecture Plan](https://github.com/Kolzodev712/trading_system/blob/master/docs/PROP_TRADING_RESEARCH_AND_PRODUCTION_PLAN.md), especially sections 6, 48–49 and Increments 5B, 6, 7 and 9A.
+**Primary plan:** [Prop Trading Productionization and Research Architecture Plan](https://github.com/Kolzodev712/trading_system/blob/master/docs/PROP_TRADING_RESEARCH_AND_PRODUCTION_PLAN.md), especially sections 6, 48–49 and Increments 5R, 5B, 6, 7 and 9A.
 
 ## Purpose and boundary
 
 K-paper is the local exchange test venue for the real `trading_system` runner, market-data engine, risk manager, executor and reconciliation path. It answers whether the machine handles orders and failures correctly. Historical strategy economics remain in `research_engine` with an independent audit. A Paper PnL result cannot promote Candidate #2, which remains rejected as validated alpha and serves as an operational baseline.
 
 The browser `trading-system-ui` speaks to the runner, never directly to K-paper. The runner owns readiness, risk and command results. K-paper owns exchange-side state, WS/REST behavior and fault injection.
+
+Increment 5R in `trading_system` moves Candidate #2's concrete adapter into a thin composition app that starts the generic runner **in the same process**. The runner/`trading_engine` crates do not depend on model or research crates. The early Spot/levels smoke test below still uses the existing default runner; the later Candidate #2 futures qualification must use the new composition app and its unchanged runner-to-K-paper adapters. No separate strategy service or simulator-to-strategy API is involved.
 
 ## Read the existing contracts first
 
@@ -59,7 +61,7 @@ Provide a test-only scenario interface or harness with controlled sequencing, tr
 
 The required fixtures in plan section 49 cover normal ACK/fill, accepted order with delayed or missing reply, rejection, partial fills, cancel/fill race, duplicate and reordered events, private/public disconnect, stale or gapped market data, REST/WS disagreement, and runner restart with working order/position/unknown submission. For each fixture:
 
-- drive the **actual** Candidate #2 runner path with controlled completed candles supplied by the runner's candle source and a separate Paper orderbook; a synthetic book is not a daily signal source;
+- drive the **actual** Candidate #2 composition app -> generic runner risk/execution path with controlled completed candles supplied by the runner's candle source and a separate Paper orderbook; a synthetic book is not a daily signal source;
 - assert K-paper account/orders/positions independently from runner journal, reservations, effective exposure, ledger and gRPC status;
 - prove no duplicate exposure and the intended entry block/recovery transition;
 - record fixture/seed, K-paper and runner revisions, observed trace and result.
