@@ -1,6 +1,6 @@
 # Prop trading integration guide for K-paper
 
-**Status:** Increment 5B Spot/levels connectivity is accepted locally at k-paper `e5d0a59`, trading_system `043ca64` (evidence `1f00fdc`), UI `66632ed`. Increment 6 recovery hooks are next; stop for review before Increment 7. Futures and the full deterministic fault matrix remain future work.
+**Status:** Increment 6 Paper recovery hooks are implemented locally. Client-order-ID lookup covers working and terminal orders; `POST /test/suppress_place_ack` drops the next place ACK while keeping the order. Isolated `paper-exchange-core` tests passed (6/6), including `client_order_id_lookup_includes_canceled` and `suppress_place_ack_keeps_working_order`. Stop for review before Increment 7. Futures and the full deterministic fault matrix remain future work.
 
 **Primary plan:** [Prop Trading Productionization and Research Architecture Plan](https://github.com/Kolzodev712/trading_system/blob/master/docs/PROP_TRADING_RESEARCH_AND_PRODUCTION_PLAN.md), especially sections 6, 48–49 and Increments 5R, 5B, 6, 7 and 9A.
 
@@ -27,8 +27,8 @@ The producer and consumer protocol must change together. Record both repository 
 | Available today | Important limit |
 | --- | --- |
 | Single in-memory account; orderbook, orders, simple crossing fills, balance reservation, execution/private events | Fill accounting is spot-style: buys consume quote and credit base; sells consume base and credit quote. Futures position accounting is not implemented by merely setting `instrument_type`. |
-| `/ws/market`, `/ws/trade`, `/balances`, `/open_orders`, `/trades`, `/exchange_info` | No authoritative REST position snapshot or terminal-order lookup by client ID for ambiguous submissions. Server restart loses the account. |
-| Static startup market scenarios and timed price overlays; seeded synthetic market engine | No accepted-but-lost ACK, controlled WS disconnect, duplicate/out-of-order private event, REST/WS disagreement or complete scripted partial-fill facility yet. |
+| `/ws/market`, `/ws/trade`, `/balances`, `/open_orders`, `/trades`, `/exchange_info`, `GET /orders/by_client_id/:id` (working and terminal) | No authoritative REST position snapshot. Server restart still loses the account. `404` on client-id lookup is inconclusive, not a rejection. |
+| Static startup market scenarios and timed price overlays; seeded synthetic market engine | `POST /test/suppress_place_ack` is a one-shot lab fault for a lost place ACK. Other faults (WS disconnect, duplicate/out-of-order private events, REST/WS disagreement, complete scripted partial-fill) remain future work. |
 | Existing Spot/levels integration in `trading_system` | The Paper client there has only one in-flight place/cancel/amend of each kind. It is a useful single-strategy constraint, not a concurrent-request simulator. |
 
 Current `runtime.rs` defaults to port **19999**. The checked-in `config/instruments.yaml` contains a `market` section, so the market engine can start even if `PAPER_EXCHANGE_PROFILE=lab`; setting the profile alone does not guarantee deterministic, static-only data. A static scenario file without `PAPER_EXCHANGE_DUMMY_OB=1` suppresses that engine. Do not use a random dev book as evidence for the deterministic qualification gate.
@@ -49,6 +49,8 @@ Use the existing Spot/levels sample and [trading-system local guide](https://git
 ## Increment 6 — recover ambiguous submissions
 
 Add the narrow Paper-side query and fault hooks needed by the real runner to test an accepted order whose ACK is lost. Assign a stable client order ID; lookup by that ID must cover working and terminal orders, independent of `/open_orders`. Keep the Paper process alive while restarting the runner and verify the same exchange order is discovered, imported and reconciled once. A missing open order or temporarily inconclusive lookup must not be treated as rejection or permit replacement exposure. Make the fault deterministic and scoped to the test; preserve ordinary `/ws/trade` and REST behavior. Pin matching producer/consumer revisions and report actual order, reservation and recovery state. Bybit pagination is implemented and tested in `trading_system`, not K-paper. Stop after the focused recovery gate.
+
+**Increment 6 result:** `GET /orders/by_client_id/:client_order_id` returns working or terminal orders (canceled rows stay in the client-id index). `POST /test/suppress_place_ack` with `{ "clientOrderId": "..." }` accepts the next matching place without emitting the quantity-0 ACK. `cargo test -p paper-exchange-core`: 6 passed, 0 failed, including lookup-after-cancel and suppressed-ACK retention. Full runner-restart-against-live-Paper is still an Increment 9A integration case; isolated recovery tests live in `trading_system`.
 
 ## Increment 7 — minimum linear futures contract
 

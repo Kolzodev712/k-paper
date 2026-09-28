@@ -112,6 +112,14 @@ pub fn run() {
                     "/exchange_info",
                     axum::routing::get(rest::get_exchange_info),
                 )
+                .route(
+                    "/orders/by_client_id/:client_order_id",
+                    axum::routing::get(rest::get_order_by_client_id),
+                )
+                .route(
+                    "/test/suppress_place_ack",
+                    axum::routing::post(rest::post_suppress_place_ack),
+                )
                 .with_state(state);
 
             let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");

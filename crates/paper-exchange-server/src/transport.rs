@@ -38,6 +38,14 @@ pub enum RestQuery {
         reply: oneshot::Sender<Vec<Execution>>,
     },
     MarketInfo(oneshot::Sender<Config>),
+    OrderByClientId {
+        client_order_id: String,
+        reply: oneshot::Sender<Option<Order>>,
+    },
+    SuppressPlaceAck {
+        client_order_id: String,
+        reply: oneshot::Sender<()>,
+    },
 }
 
 pub async fn ws_handler(ws: WebSocketUpgrade, state: Arc<AppState>) -> Response {

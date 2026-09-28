@@ -9,6 +9,7 @@ use crate::orderbook::Orderbook;
 use crate::types::*;
 use chrono::Utc;
 use rust_decimal::Decimal;
+use std::collections::HashSet;
 use tokio::sync::mpsc;
 
 pub struct PaperExchange {
@@ -22,6 +23,8 @@ pub struct PaperExchange {
     private_tx: mpsc::UnboundedSender<StreamEvent<PrivateEvent>>,
     market_sequence: u64,
     private_sequence: u64,
+    /// One-shot lab fault: accept the order but do not emit the place ACK execution.
+    suppress_place_ack: HashSet<String>,
 }
 
 impl PaperExchange {
@@ -51,6 +54,7 @@ impl PaperExchange {
             private_tx,
             market_sequence: 0,
             private_sequence: 0,
+            suppress_place_ack: HashSet::new(),
         };
         (exchange, market_rx, private_rx)
     }
@@ -172,21 +176,28 @@ impl PaperExchange {
 
     pub fn place_order(&mut self, req: OrderRequest) -> Result<Order, ExchangeError> {
         let now = self.now();
+        let suppress = req
+            .client_order_id
+            .as_ref()
+            .map(|cid| self.suppress_place_ack.remove(&cid.0))
+            .unwrap_or(false);
         let order = self
             .order_manager
             .place_order(req, &mut self.account, now)?;
 
-        self.send_private(PrivateEvent::Execution(Execution {
-            order_id: order.order_id,
-            trade_id: TradeId::nil(),
-            instrument_id: order.instrument_id.clone(),
-            side: order.side.clone(),
-            price: order.price,
-            quantity: Decimal::ZERO,
-            fee: None,
-            timestamp: now,
-            reject_reason: None,
-        }));
+        if !suppress {
+            self.send_private(PrivateEvent::Execution(Execution {
+                order_id: order.order_id,
+                trade_id: TradeId::nil(),
+                instrument_id: order.instrument_id.clone(),
+                side: order.side.clone(),
+                price: order.price,
+                quantity: Decimal::ZERO,
+                fee: None,
+                timestamp: now,
+                reject_reason: None,
+            }));
+        }
 
         self.run_matching()?;
 
@@ -231,6 +242,18 @@ impl PaperExchange {
         // Sort by created_at ascending for deterministic output.
         out.sort_by_key(|o| o.created_at);
         out
+    }
+
+    /// Look up an order by client id, including filled/canceled/rejected.
+    pub fn get_order_by_client_id(&self, client_order_id: &str) -> Option<Order> {
+        self.order_manager
+            .get_order_by_client_id(&ClientOrderId(client_order_id.to_string()))
+            .cloned()
+    }
+
+    /// Next matching `client_order_id` is accepted on the book but the place ACK is dropped.
+    pub fn suppress_next_place_ack(&mut self, client_order_id: String) {
+        self.suppress_place_ack.insert(client_order_id);
     }
 
     /// Return trade executions (fills only), optionally filtered by instrument_id and limited to the last N.

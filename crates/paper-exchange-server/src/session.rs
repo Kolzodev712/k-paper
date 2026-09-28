@@ -48,7 +48,7 @@ pub async fn run_core_loop(
             }
         }
         while let Ok(q) = rest_query_rx.try_recv() {
-            handle_rest_query(&exchange, q);
+            handle_rest_query(&mut exchange, q);
         }
         while let Ok(cmd) = user_command_rx.try_recv() {
             run_user_command(&mut exchange, &event_tx, &mut private_rx, cmd);
@@ -79,7 +79,7 @@ pub async fn run_core_loop(
                 }
             }
             Some(q) = rest_query_rx.recv() => {
-                handle_rest_query(&exchange, q);
+                handle_rest_query(&mut exchange, q);
             }
             Some(ev) = market_rx.recv() => {
                 let _ = event_tx.send(BroadcastEvent::Market(ev));
@@ -182,7 +182,7 @@ fn run_dummy_command(exchange: &mut PaperExchange, cmd: Command) {
     }
 }
 
-fn handle_rest_query(exchange: &PaperExchange, q: RestQuery) {
+fn handle_rest_query(exchange: &mut PaperExchange, q: RestQuery) {
     match q {
         RestQuery::Balances(reply) => {
             let balances = exchange.get_snapshot_data().0;
@@ -208,6 +208,20 @@ fn handle_rest_query(exchange: &PaperExchange, q: RestQuery) {
         RestQuery::MarketInfo(reply) => {
             let cfg = exchange.get_config();
             let _ = reply.send(cfg);
+        }
+        RestQuery::OrderByClientId {
+            client_order_id,
+            reply,
+        } => {
+            let order = exchange.get_order_by_client_id(&client_order_id);
+            let _ = reply.send(order);
+        }
+        RestQuery::SuppressPlaceAck {
+            client_order_id,
+            reply,
+        } => {
+            exchange.suppress_next_place_ack(client_order_id);
+            let _ = reply.send(());
         }
     }
 }

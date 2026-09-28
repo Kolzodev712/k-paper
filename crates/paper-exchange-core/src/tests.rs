@@ -207,3 +207,88 @@ fn duplicate_client_order_id_rejected() {
 
     assert!(matches!(err, crate::error::ExchangeError::Validation(_)));
 }
+
+#[test]
+fn client_order_id_lookup_includes_canceled() {
+    let config = test_config();
+    let (mut exchange, _, _) = PaperExchange::new(config);
+    exchange
+        .inject_orderbook(OrderbookSnapshot {
+            instrument_id: InstrumentId::new("BTC-USDT"),
+            bids: vec![],
+            asks: vec![BookLevel {
+                price: decimal("50100"),
+                quantity: decimal("1"),
+            }],
+            sequence: 1,
+            timestamp: Utc::now(),
+        })
+        .unwrap();
+
+    let cid = ClientOrderId("lookup-term".to_string());
+    let placed = exchange
+        .place_order(OrderRequest {
+            instrument_id: InstrumentId::new("BTC-USDT"),
+            side: Side::Buy,
+            order_type: OrderType::Limit,
+            quantity: decimal("0.1"),
+            limit_price: Some(decimal("40000")),
+            client_order_id: Some(cid.clone()),
+        })
+        .unwrap();
+    assert_eq!(placed.status, OrderStatus::New);
+    assert!(exchange.get_order_by_client_id("lookup-term").is_some());
+
+    exchange
+        .cancel_order(CancelRequest::ByClientOrderId(cid))
+        .unwrap();
+    let found = exchange
+        .get_order_by_client_id("lookup-term")
+        .expect("terminal lookup");
+    assert_eq!(found.status, OrderStatus::Canceled);
+    assert!(exchange.get_open_orders(None).is_empty());
+}
+
+#[test]
+fn suppress_place_ack_keeps_working_order() {
+    let config = test_config();
+    let (mut exchange, _, mut private_rx) = PaperExchange::new(config);
+    exchange
+        .inject_orderbook(OrderbookSnapshot {
+            instrument_id: InstrumentId::new("BTC-USDT"),
+            bids: vec![],
+            asks: vec![BookLevel {
+                price: decimal("50100"),
+                quantity: decimal("1"),
+            }],
+            sequence: 1,
+            timestamp: Utc::now(),
+        })
+        .unwrap();
+
+    exchange.suppress_next_place_ack("lost-ack".into());
+    let placed = exchange
+        .place_order(OrderRequest {
+            instrument_id: InstrumentId::new("BTC-USDT"),
+            side: Side::Buy,
+            order_type: OrderType::Limit,
+            quantity: decimal("0.1"),
+            limit_price: Some(decimal("40000")),
+            client_order_id: Some(ClientOrderId("lost-ack".into())),
+        })
+        .unwrap();
+    assert_eq!(placed.status, OrderStatus::New);
+    let mut saw_ack = false;
+    while let Ok(ev) = private_rx.try_recv() {
+        if let PrivateEvent::Execution(e) = ev.payload {
+            if e.quantity == decimal("0") && e.order_id == placed.order_id {
+                saw_ack = true;
+            }
+        }
+    }
+    assert!(!saw_ack, "place ACK must be suppressed");
+    let found = exchange
+        .get_order_by_client_id("lost-ack")
+        .expect("working order retained");
+    assert_eq!(found.status, OrderStatus::New);
+}

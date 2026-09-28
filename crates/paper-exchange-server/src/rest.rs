@@ -1,5 +1,5 @@
 use crate::transport::{AppState, RestQuery};
-use axum::extract::Query;
+use axum::extract::{Path, Query};
 use axum::http::StatusCode;
 use axum::Json;
 use chrono::{DateTime, Utc};
@@ -225,4 +225,51 @@ pub async fn get_exchange_info(
         rate_limits: Vec::new(),
         symbols,
     }))
+}
+
+pub async fn get_order_by_client_id(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Path(client_order_id): Path<String>,
+) -> Result<Json<OpenOrderDto>, StatusCode> {
+    let (tx, rx) = oneshot::channel();
+    if state
+        .rest_query_tx
+        .send(RestQuery::OrderByClientId {
+            client_order_id,
+            reply: tx,
+        })
+        .is_err()
+    {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    match rx.await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)? {
+        Some(order) => Ok(Json(OpenOrderDto::from(order))),
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct SuppressPlaceAckBody {
+    #[serde(rename = "clientOrderId")]
+    pub client_order_id: String,
+}
+
+/// Lab fault hook: next place with this client id is accepted but the ACK is dropped.
+pub async fn post_suppress_place_ack(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(body): Json<SuppressPlaceAckBody>,
+) -> Result<StatusCode, StatusCode> {
+    let (tx, rx) = oneshot::channel();
+    if state
+        .rest_query_tx
+        .send(RestQuery::SuppressPlaceAck {
+            client_order_id: body.client_order_id,
+            reply: tx,
+        })
+        .is_err()
+    {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    rx.await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::NO_CONTENT)
 }

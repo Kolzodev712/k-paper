@@ -113,7 +113,7 @@ impl OrderManager {
                 .ok_or(ExchangeError::OrderNotFound)?,
         };
 
-        let (instrument_id, side, quantity, price, filled_qty, client_order_id) = {
+        let (instrument_id, side, quantity, price, filled_qty, _client_order_id) = {
             let order = self
                 .orders_by_id
                 .get(&order_id)
@@ -157,9 +157,6 @@ impl OrderManager {
         order.updated_at = now;
 
         let out = order.clone();
-        if let Some(ref cid) = client_order_id {
-            self.orders_by_client_id.remove(cid);
-        }
         Ok(out)
     }
 
@@ -252,6 +249,14 @@ impl OrderManager {
 
     pub fn get_order(&self, order_id: crate::types::OrderId) -> Option<&Order> {
         self.orders_by_id.get(&order_id)
+    }
+
+    pub fn get_order_by_client_id(
+        &self,
+        client_order_id: &crate::types::ClientOrderId,
+    ) -> Option<&Order> {
+        let order_id = self.orders_by_client_id.get(client_order_id)?;
+        self.orders_by_id.get(order_id)
     }
 
     pub fn get_order_mut(&mut self, order_id: &crate::types::OrderId) -> Option<&mut Order> {
