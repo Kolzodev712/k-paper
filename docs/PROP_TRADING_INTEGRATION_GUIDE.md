@@ -1,6 +1,6 @@
 # Prop trading integration guide for K-paper
 
-**Status:** Increment 9A lab hooks now include drop/partial fill, position-before-fill, lying WS position, and lab_fill_open. Matching runner 9A matrix is reported locally and waits owner re-review. Increment 9 runner ledger remains accepted. Candidate #2 remains an operational baseline, not validated alpha. Bybit demo is not started.
+**Status:** Increment 9A lab hooks now include drop/partial fill, position-before-fill, lying WS position, lab_fill_open, and fail_open_orders. Matching runner 9A matrix is reported locally and waits owner re-review. Increment 9 runner ledger remains accepted. Candidate #2 remains an operational baseline, not validated alpha. Bybit demo is not started.
 
 **Primary plan:** [Prop Trading Productionization and Research Architecture Plan](https://github.com/Kolzodev712/trading_system/blob/master/docs/PROP_TRADING_RESEARCH_AND_PRODUCTION_PLAN.md), especially sections 6, 48–49 and Increments 5R, 5B, 6, 7 and 9A.
 
@@ -89,7 +89,7 @@ The required fixtures in plan section 49 cover normal ACK/fill, accepted order w
 
 Automate the core cases without browser clicks; use the browser to observe representative cases and invoke operator controls. Restart the **runner** while K-paper retains state. An exchange-server restart needs a persistence/restore design before it can count as a continuity test.
 
-**Increment 9A result (revised):** Lab REST hooks: `/test/reject_next_place`, `/test/duplicate_next_fill`, `/test/stale_orderbook`, `/test/disconnect_clients`, `/test/drop_next_place`, `/test/position_before_fill`, `/test/emit_ws_position`, `/test/lab_fill_open`, plus existing suppress/reset. `emit_ws_position` does not mutate REST account. `lab_fill_open` can partial-fill a resting order. `cargo test -p paper-exchange-core --lib`: 23 passed. Matching `trading_system` `10fee5b19eae755697bb1b62447a5b45ea77e857` `scripts/inc9a_matrix.sh` exit 0 on `:19995` drove those hooks through Candidate #2 with journal/ledger/grpc asserts (row table in the runner plan Increment 9A). Paper process restart still loses the account. Candidate #2 remains an operational baseline, not validated alpha.
+**Increment 9A result (revised):** Lab REST hooks: `/test/reject_next_place`, `/test/duplicate_next_fill`, `/test/stale_orderbook`, `/test/disconnect_clients`, `/test/drop_next_place`, `/test/position_before_fill`, `/test/emit_ws_position`, `/test/lab_fill_open`, `/test/fail_open_orders`, plus existing suppress/reset. `emit_ws_position` does not mutate REST account. `lab_fill_open` can partial-fill a resting order. `fail_open_orders` returns 503 on GET `/open_orders` until reset. `cargo test -p paper-exchange-core --lib`: 24 passed, including `lab_fill_then_duplicate_keeps_working_remainder`. Matching `trading_system` `9dab54ecff7f2b250b10ad575cf1c14653f65dc3` `scripts/inc9a_matrix.sh` exit 0 on `:19995` drove those hooks through Candidate #2 with journal/ledger/grpc asserts (row table in the runner plan Increment 9A). Paper process restart still loses the account. Candidate #2 remains an operational baseline, not validated alpha.
 
 ## Verification and handoff
 
