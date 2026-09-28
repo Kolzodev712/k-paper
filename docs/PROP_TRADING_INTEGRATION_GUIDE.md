@@ -1,6 +1,6 @@
 # Prop trading integration guide for K-paper
 
-**Status:** Increment 5B is ready to begin after local 5R/5A acceptance in the primary plan. This is the existing Spot/levels connectivity preflight only; futures and deterministic fault capabilities remain future work.
+**Status:** Increment 5B Spot/levels connectivity is accepted locally at k-paper `e5d0a59`, trading_system `043ca64` (evidence `1f00fdc`), UI `66632ed`. Increment 6 recovery hooks are next; stop for review before Increment 7. Futures and the full deterministic fault matrix remain future work.
 
 **Primary plan:** [Prop Trading Productionization and Research Architecture Plan](https://github.com/Kolzodev712/trading_system/blob/master/docs/PROP_TRADING_RESEARCH_AND_PRODUCTION_PLAN.md), especially sections 6, 48–49 and Increments 5R, 5B, 6, 7 and 9A.
 
@@ -44,15 +44,19 @@ Use the existing Spot/levels sample and [trading-system local guide](https://git
 3. REST balances, open orders, trades and exchange info are mapped through the existing adapters and reconciled by the runner.
 4. The UI connects to that runner and labels the environment Paper/local.
 
-Record observed endpoints, versions and any failures. This is a connectivity smoke test; it does **not** qualify Candidate #2's BTCUSDT linear perpetual.
+**5B result (2026-09-28):** K-paper Dev on `:19999` exposed five symbols and six balances; `/open_orders` and `/trades` were empty. `/ws/market` delivered a BTC-USDT book, and `/ws/trade` returned `get_account_snapshot` on the same socket. The default levels runner connected both streams and bootstrap-reconciled six balances, zero orders and zero trades without discrepancy; the browser showed live **PAPER LOCAL + EXCHANGE** from runner status. Trading was off, so no order was posted. Only bootstrap reconciliation was observed. This closes connectivity only; populated order/trade mapping and ambiguous-submission behavior belong to the next gates.
 
-## Increments 6–7 — minimum futures and recovery contract
+## Increment 6 — recover ambiguous submissions
+
+Add the narrow Paper-side query and fault hooks needed by the real runner to test an accepted order whose ACK is lost. Assign a stable client order ID; lookup by that ID must cover working and terminal orders, independent of `/open_orders`. Keep the Paper process alive while restarting the runner and verify the same exchange order is discovered, imported and reconciled once. A missing open order or temporarily inconclusive lookup must not be treated as rejection or permit replacement exposure. Make the fault deterministic and scoped to the test; preserve ordinary `/ws/trade` and REST behavior. Pin matching producer/consumer revisions and report actual order, reservation and recovery state. Bybit pagination is implemented and tested in `trading_system`, not K-paper. Stop after the focused recovery gate.
+
+## Increment 7 — minimum linear futures contract
 
 Design only the one-way USDT-linear BTCUSDT behavior required to exercise Candidate #2. Document the chosen accounting rules and exact test fixtures before implementing them:
 
 - Authoritative signed position (flat/long, with unexpected short detectable), entry basis, collateral/margin, realized/unrealized PnL, fees and controlled funding. A sell that reduces a long must not require a spot BTC balance. Define funding, fee and margin parameters explicitly in fixtures; do not silently borrow a Bybit assumption.
 - Place/fill/partial-fill/cancel/exit transitions update order, account and position consistently; private position events and an independent REST position snapshot agree. Enforce reduce-only so an exit cannot create or enlarge a short.
-- Stable client order identity, duplicate-ID handling and an authoritative lookup by client ID that covers live **and terminal** orders. Absence from `/open_orders` never proves an accepted order was rejected. A lost reply must be recoverable after runner restart while K-paper remains alive.
+- Preserve the Increment 6 client-order-ID lookup and duplicate-ID behavior across the new futures order lifecycle. Absence from `/open_orders` never proves an accepted order was rejected; recovery must work after runner restart while K-paper remains alive.
 - Adapt `trading_system` Paper REST/WS mappings and futures-specific `TradingClient` methods together. Readiness and risk still belong to the runner; do not put strategy-specific logic in this server.
 
 Explicitly list simulator/Bybit differences in the qualification report. K-paper needs enough futures semantics to test the runner; it need not clone every Bybit feature.
