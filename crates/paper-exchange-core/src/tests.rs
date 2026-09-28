@@ -425,7 +425,7 @@ fn linear_open_buy_locks_usdt_margin_not_btc() {
 
 #[test]
 fn linear_reduce_only_exit_does_not_need_btc() {
-    let (mut exchange, _, _) = PaperExchange::new(linear_config());
+    let (mut exchange, _, mut private_rx) = PaperExchange::new(linear_config());
     exchange
         .inject_orderbook(linear_book("50000", "49900"))
         .unwrap();
@@ -440,6 +440,7 @@ fn linear_reduce_only_exit_does_not_need_btc() {
             reduce_only: false,
         })
         .unwrap();
+    while private_rx.try_recv().is_ok() {}
     exchange
         .inject_orderbook(linear_book("51000", "50000"))
         .unwrap();
@@ -457,6 +458,18 @@ fn linear_reduce_only_exit_does_not_need_btc() {
     assert_eq!(exit.status, OrderStatus::Filled);
     let (_, positions) = exchange.get_snapshot_data();
     assert!(positions.is_empty(), "flatten must clear the position");
+    let mut saw_zero = false;
+    while let Ok(ev) = private_rx.try_recv() {
+        if let PrivateEvent::Position(p) = ev.payload {
+            if p.quantity == Decimal::ZERO && p.instrument_id.0 == "BTC-USDT" {
+                saw_zero = true;
+            }
+        }
+    }
+    assert!(
+        saw_zero,
+        "flatten must emit a qty=0 position for the runner"
+    );
 }
 
 #[test]
@@ -491,4 +504,109 @@ fn linear_one_way_sell_without_reduce_only_rejected_when_flat() {
         })
         .unwrap_err();
     assert!(err.to_string().contains("short"));
+}
+
+#[test]
+fn reject_next_place_does_not_book_an_order() {
+    let (mut exchange, _, _) = PaperExchange::new(test_config());
+    exchange.reject_next_place("lab_reject".into());
+    let err = exchange
+        .place_order(OrderRequest {
+            instrument_id: InstrumentId::new("BTC-USDT"),
+            side: Side::Buy,
+            order_type: OrderType::Limit,
+            quantity: decimal("0.1"),
+            limit_price: Some(decimal("40000")),
+            client_order_id: Some(ClientOrderId("rej-1".into())),
+            reduce_only: false,
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("lab_reject"));
+    assert!(exchange.get_order_by_client_id("rej-1").is_none());
+    exchange
+        .place_order(OrderRequest {
+            instrument_id: InstrumentId::new("BTC-USDT"),
+            side: Side::Buy,
+            order_type: OrderType::Limit,
+            quantity: decimal("0.1"),
+            limit_price: Some(decimal("40000")),
+            client_order_id: Some(ClientOrderId("rej-2".into())),
+            reduce_only: false,
+        })
+        .unwrap();
+    assert!(exchange.get_order_by_client_id("rej-2").is_some());
+}
+
+#[test]
+fn reset_lab_faults_clears_one_shot_hooks() {
+    let (mut exchange, _, _) = PaperExchange::new(test_config());
+    exchange.suppress_next_place_ack_any();
+    exchange.reject_next_place("x".into());
+    exchange.duplicate_next_fill();
+    exchange.reset_lab_faults();
+    let placed = exchange
+        .place_order(OrderRequest {
+            instrument_id: InstrumentId::new("BTC-USDT"),
+            side: Side::Buy,
+            order_type: OrderType::Limit,
+            quantity: decimal("0.1"),
+            limit_price: Some(decimal("40000")),
+            client_order_id: Some(ClientOrderId("reset-1".into())),
+            reduce_only: false,
+        })
+        .unwrap();
+    assert_eq!(placed.status, OrderStatus::New);
+}
+
+#[test]
+fn stale_book_ages_injected_snapshot() {
+    let (mut exchange, mut market_rx, _) = PaperExchange::new(test_config());
+    exchange.set_stale_book_age_secs(3_600);
+    exchange
+        .inject_orderbook(OrderbookSnapshot {
+            instrument_id: InstrumentId::new("BTC-USDT"),
+            bids: vec![BookLevel {
+                price: decimal("50000"),
+                quantity: decimal("1"),
+            }],
+            asks: vec![BookLevel {
+                price: decimal("50100"),
+                quantity: decimal("1"),
+            }],
+            sequence: 1,
+            timestamp: Utc::now(),
+        })
+        .unwrap();
+    let ev = market_rx.try_recv().expect("aged book");
+    match ev.payload {
+        MarketDataEvent::Orderbook(s) => {
+            let age = (Utc::now() - s.timestamp).num_seconds();
+            assert!(age >= 3_500, "age={age}");
+        }
+        other => panic!("expected orderbook, got {other:?}"),
+    }
+    exchange.reset_lab_faults();
+    exchange
+        .inject_orderbook(OrderbookSnapshot {
+            instrument_id: InstrumentId::new("BTC-USDT"),
+            bids: vec![BookLevel {
+                price: decimal("50000"),
+                quantity: decimal("1"),
+            }],
+            asks: vec![BookLevel {
+                price: decimal("50100"),
+                quantity: decimal("1"),
+            }],
+            sequence: 2,
+            timestamp: Utc::now(),
+        })
+        .unwrap();
+    let ev = market_rx.try_recv().expect("fresh book");
+    match ev.payload {
+        MarketDataEvent::Orderbook(s) => {
+            let age = (Utc::now() - s.timestamp).num_seconds();
+            assert!(age < 5, "age={age}");
+        }
+        other => panic!("expected orderbook, got {other:?}"),
+    }
 }

@@ -1,6 +1,6 @@
 # Prop trading integration guide for K-paper
 
-**Status:** Increment 9 runner ledger is accepted in `trading_system` (k-paper unchanged). Increment 7 linear contract remains implemented. Increment 6 remains accepted. Candidate #2 remains an operational baseline, not validated alpha. The full section 49 matrix remains Increment 9A.
+**Status:** Increment 9A Paper lab hooks are implemented. Increment 9 runner ledger remains accepted. Increment 7 linear contract remains implemented. Increment 6 remains accepted. Candidate #2 remains an operational baseline, not validated alpha. Bybit demo is not started.
 
 **Primary plan:** [Prop Trading Productionization and Research Architecture Plan](https://github.com/Kolzodev712/trading_system/blob/master/docs/PROP_TRADING_RESEARCH_AND_PRODUCTION_PLAN.md), especially sections 6, 48–49 and Increments 5R, 5B, 6, 7 and 9A.
 
@@ -28,7 +28,7 @@ The producer and consumer protocol must change together. Record both repository 
 | --- | --- |
 | Single in-memory account; orderbook, orders, simple crossing fills, balance reservation, execution/private events | Fill accounting is spot-style: buys consume quote and credit base; sells consume base and credit quote. Futures position accounting is not implemented by merely setting `instrument_type`. |
 | `/ws/market`, `/ws/trade`, `/balances`, `/open_orders`, `/trades`, `/exchange_info`, `GET /orders/by_client_id/:id`, `GET /positions` | Server restart still loses the account. `404` on client-id lookup is inconclusive, not a rejection. Linear accounting is opt-in via `instrument_type: futures` plus `linear` fixture; default YAML stays spot. |
-| Static startup market scenarios and timed price overlays; seeded synthetic market engine | `POST /test/suppress_place_ack` is a one-shot lab fault for a lost place ACK (`clientOrderId` optional: omit to arm the next place). Other faults (WS disconnect, duplicate/out-of-order private events, REST/WS disagreement, complete scripted partial-fill) remain future work. |
+| Static startup market scenarios and timed price overlays; seeded synthetic market engine | Lab one-shots: `POST /test/suppress_place_ack`, `/test/reject_next_place`, `/test/duplicate_next_fill`, `/test/stale_orderbook`, `/test/disconnect_clients`, `/test/reset_lab_faults`. Paper MD is snapshot-only (no Bybit sequence-gap). A false REST position override is not provided because recon still applies REST as position truth. |
 | Existing Spot/levels integration in `trading_system` | The Paper client there has only one in-flight place/cancel/amend of each kind. It is a useful single-strategy constraint, not a concurrent-request simulator. |
 
 Current `runtime.rs` defaults to port **19999**. The checked-in `config/instruments.yaml` contains a `market` section, so the market engine can start even if `PAPER_EXCHANGE_PROFILE=lab`; setting the profile alone does not guarantee deterministic, static-only data. A static scenario file without `PAPER_EXCHANGE_DUMMY_OB=1` suppresses that engine. Do not use a random dev book as evidence for the deterministic qualification gate.
@@ -88,6 +88,8 @@ The required fixtures in plan section 49 cover normal ACK/fill, accepted order w
 - record fixture/seed, K-paper and runner revisions, observed trace and result.
 
 Automate the core cases without browser clicks; use the browser to observe representative cases and invoke operator controls. Restart the **runner** while K-paper retains state. An exchange-server restart needs a persistence/restore design before it can count as a continuity test.
+
+**Increment 9A result:** Linear flatten now emits a qty=0 `Position` so the runner can clear TSM (`linear_reduce_only_exit_does_not_need_btc`). `cargo test -p paper-exchange-core`: 18 passed including reject, reset, stale-book age, flatten-zero emit. `cargo check -p paper-exchange-server`: ok. Live `trading_system` `scripts/inc9a_matrix.sh` against this process on `:19995`: C2 fill, restart-with-position, Pause/Flatten/Resume vs independent `/positions`, lost-ACK `inc9a-lost-ack-1` / `d0241998-…` recovered without a second order, disconnect closed both sockets. Matching runner SHA is recorded in `trading_system` plan Increment 9A. Paper process restart still loses the account. Candidate #2 remains an operational baseline, not validated alpha.
 
 ## Verification and handoff
 

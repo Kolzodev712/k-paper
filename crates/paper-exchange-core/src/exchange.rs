@@ -27,6 +27,12 @@ pub struct PaperExchange {
     suppress_place_ack: HashSet<String>,
     /// One-shot lab fault: suppress the ACK of the next place regardless of client id.
     suppress_next_any: bool,
+    /// One-shot lab fault: reject the next place without keeping an order.
+    reject_next: Option<String>,
+    /// One-shot lab fault: emit the next fill execution twice.
+    duplicate_next_fill: bool,
+    /// When set, injected orderbooks are stamped `now - age` so the runner sees stale MD.
+    stale_book_age_secs: Option<i64>,
 }
 
 impl PaperExchange {
@@ -58,6 +64,9 @@ impl PaperExchange {
             private_sequence: 0,
             suppress_place_ack: HashSet::new(),
             suppress_next_any: false,
+            reject_next: None,
+            duplicate_next_fill: false,
+            stale_book_age_secs: None,
         };
         (exchange, market_rx, private_rx)
     }
@@ -82,8 +91,18 @@ impl PaperExchange {
         });
     }
 
-    pub fn inject_orderbook(&mut self, snapshot: OrderbookSnapshot) -> Result<(), ExchangeError> {
-        let out = self.orderbook.apply_snapshot(snapshot);
+    pub fn inject_orderbook(
+        &mut self,
+        mut snapshot: OrderbookSnapshot,
+    ) -> Result<(), ExchangeError> {
+        if let Some(age) = self.stale_book_age_secs {
+            snapshot.timestamp = Utc::now() - chrono::Duration::seconds(age.max(0));
+        }
+        let aged = snapshot.timestamp;
+        let mut out = self.orderbook.apply_snapshot(snapshot);
+        if self.stale_book_age_secs.is_some() {
+            out.timestamp = aged;
+        }
         self.send_market(MarketDataEvent::Orderbook(out));
         self.run_matching()?;
         Ok(())
@@ -185,7 +204,11 @@ impl PaperExchange {
             let drop = self.trades.len() - cap;
             self.trades.drain(0..drop);
         }
-        self.send_private(PrivateEvent::Execution(exec));
+        self.send_private(PrivateEvent::Execution(exec.clone()));
+        if self.duplicate_next_fill {
+            self.duplicate_next_fill = false;
+            self.send_private(PrivateEvent::Execution(exec));
+        }
 
         let pt = PublicTrade {
             instrument_id: order.instrument_id.clone(),
@@ -203,12 +226,25 @@ impl PaperExchange {
         for pos in self.account.get_all_positions() {
             self.send_private(PrivateEvent::Position(pos));
         }
+        if linear && self.account.get_position(&order.instrument_id).is_none() {
+            // Account drops flat rows; still emit qty=0 so the runner can clear TSM.
+            self.send_private(PrivateEvent::Position(Position {
+                instrument_id: order.instrument_id.clone(),
+                side: order.side.clone(),
+                quantity: Decimal::ZERO,
+                entry_price: Decimal::ZERO,
+                unrealized_pnl: Some(Decimal::ZERO),
+            }));
+        }
 
         Ok(())
     }
 
     pub fn place_order(&mut self, req: OrderRequest) -> Result<Order, ExchangeError> {
         let now = self.now();
+        if let Some(reason) = self.reject_next.take() {
+            return Err(ExchangeError::Validation(reason));
+        }
         let mut suppress = false;
         if self.suppress_next_any {
             self.suppress_next_any = false;
@@ -297,6 +333,30 @@ impl PaperExchange {
     /// Next place, regardless of client id, is accepted but the place ACK is dropped.
     pub fn suppress_next_place_ack_any(&mut self) {
         self.suppress_next_any = true;
+    }
+
+    /// Next place is rejected and not booked.
+    pub fn reject_next_place(&mut self, reason: String) {
+        self.reject_next = Some(reason);
+    }
+
+    /// Next fill execution is emitted twice (idempotency lab).
+    pub fn duplicate_next_fill(&mut self) {
+        self.duplicate_next_fill = true;
+    }
+
+    /// Stamp subsequent injected books with an aged timestamp (stale-MD lab).
+    pub fn set_stale_book_age_secs(&mut self, age_secs: i64) {
+        self.stale_book_age_secs = Some(age_secs.max(0));
+    }
+
+    /// Clear one-shot lab faults so a later fixture cannot inherit them.
+    pub fn reset_lab_faults(&mut self) {
+        self.suppress_place_ack.clear();
+        self.suppress_next_any = false;
+        self.reject_next = None;
+        self.duplicate_next_fill = false;
+        self.stale_book_age_secs = None;
     }
 
     /// Return trade executions (fills only), optionally filtered by instrument_id and limited to the last N.

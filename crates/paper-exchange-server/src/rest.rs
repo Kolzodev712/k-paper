@@ -284,3 +284,95 @@ pub async fn post_suppress_place_ack(
     rx.await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::NO_CONTENT)
 }
+
+#[derive(Deserialize)]
+pub struct RejectNextPlaceBody {
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+pub async fn post_reject_next_place(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(body): Json<RejectNextPlaceBody>,
+) -> Result<StatusCode, StatusCode> {
+    let (tx, rx) = oneshot::channel();
+    if state
+        .rest_query_tx
+        .send(RestQuery::RejectNextPlace {
+            reason: body
+                .reason
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "lab_reject".into()),
+            reply: tx,
+        })
+        .is_err()
+    {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    rx.await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn post_duplicate_next_fill(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> Result<StatusCode, StatusCode> {
+    let (tx, rx) = oneshot::channel();
+    if state
+        .rest_query_tx
+        .send(RestQuery::DuplicateNextFill { reply: tx })
+        .is_err()
+    {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    rx.await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn post_reset_lab_faults(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> Result<StatusCode, StatusCode> {
+    let (tx, rx) = oneshot::channel();
+    if state
+        .rest_query_tx
+        .send(RestQuery::ResetLabFaults { reply: tx })
+        .is_err()
+    {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    rx.await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct StaleOrderbookBody {
+    #[serde(default)]
+    pub age_secs: Option<i64>,
+}
+
+pub async fn post_stale_orderbook(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(body): Json<StaleOrderbookBody>,
+) -> Result<StatusCode, StatusCode> {
+    let (tx, rx) = oneshot::channel();
+    if state
+        .rest_query_tx
+        .send(RestQuery::StaleOrderbook {
+            age_secs: body.age_secs.unwrap_or(3600),
+            reply: tx,
+        })
+        .is_err()
+    {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    rx.await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn post_disconnect_clients(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> Result<StatusCode, StatusCode> {
+    let _ = state
+        .event_tx
+        .send(crate::wire::BroadcastEvent::LabDisconnect);
+    Ok(StatusCode::NO_CONTENT)
+}

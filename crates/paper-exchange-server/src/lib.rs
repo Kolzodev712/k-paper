@@ -121,6 +121,26 @@ pub fn run() {
                     "/test/suppress_place_ack",
                     axum::routing::post(rest::post_suppress_place_ack),
                 )
+                .route(
+                    "/test/reject_next_place",
+                    axum::routing::post(rest::post_reject_next_place),
+                )
+                .route(
+                    "/test/duplicate_next_fill",
+                    axum::routing::post(rest::post_duplicate_next_fill),
+                )
+                .route(
+                    "/test/reset_lab_faults",
+                    axum::routing::post(rest::post_reset_lab_faults),
+                )
+                .route(
+                    "/test/stale_orderbook",
+                    axum::routing::post(rest::post_stale_orderbook),
+                )
+                .route(
+                    "/test/disconnect_clients",
+                    axum::routing::post(rest::post_disconnect_clients),
+                )
                 .with_state(state);
 
             let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");

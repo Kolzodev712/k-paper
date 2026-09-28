@@ -149,6 +149,8 @@ pub enum ServerMessage {
 pub enum BroadcastEvent {
     Market(paper_exchange_core::types::StreamEvent<paper_exchange_core::types::MarketDataEvent>),
     Private(paper_exchange_core::types::StreamEvent<paper_exchange_core::types::PrivateEvent>),
+    /// Lab fault: every connected WS client should close.
+    LabDisconnect,
 }
 
 impl From<paper_exchange_core::types::StreamEvent<paper_exchange_core::types::MarketDataEvent>>

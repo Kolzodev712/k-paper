@@ -226,6 +226,22 @@ fn handle_rest_query(exchange: &mut PaperExchange, q: RestQuery) {
             }
             let _ = reply.send(());
         }
+        RestQuery::RejectNextPlace { reason, reply } => {
+            exchange.reject_next_place(reason);
+            let _ = reply.send(());
+        }
+        RestQuery::DuplicateNextFill { reply } => {
+            exchange.duplicate_next_fill();
+            let _ = reply.send(());
+        }
+        RestQuery::ResetLabFaults { reply } => {
+            exchange.reset_lab_faults();
+            let _ = reply.send(());
+        }
+        RestQuery::StaleOrderbook { age_secs, reply } => {
+            exchange.set_stale_book_age_secs(age_secs);
+            let _ = reply.send(());
+        }
         RestQuery::Positions(reply) => {
             let positions = exchange.get_snapshot_data().1;
             let _ = reply.send(positions);

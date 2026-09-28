@@ -47,6 +47,20 @@ pub enum RestQuery {
         client_order_id: Option<String>,
         reply: oneshot::Sender<()>,
     },
+    RejectNextPlace {
+        reason: String,
+        reply: oneshot::Sender<()>,
+    },
+    DuplicateNextFill {
+        reply: oneshot::Sender<()>,
+    },
+    ResetLabFaults {
+        reply: oneshot::Sender<()>,
+    },
+    StaleOrderbook {
+        age_secs: i64,
+        reply: oneshot::Sender<()>,
+    },
 }
 
 pub async fn ws_handler(ws: WebSocketUpgrade, state: Arc<AppState>) -> Response {
@@ -119,9 +133,14 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, trading: boo
                             continue;
                         }
                     }
+                    if matches!(ev, BroadcastEvent::LabDisconnect) {
+                        let _ = sender.send(Message::Close(None)).await;
+                        break;
+                    }
                     let msg: ServerMessage = match ev {
                         BroadcastEvent::Market(m) => m.into(),
                         BroadcastEvent::Private(p) => p.into(),
+                        BroadcastEvent::LabDisconnect => unreachable!("handled above"),
                     };
                     if let Ok(serialized) = serde_json::to_string(&msg) {
                         if sender.send(Message::Text(serialized)).await.is_err() {
