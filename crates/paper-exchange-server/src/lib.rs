@@ -161,6 +161,10 @@ pub fn run() {
                     "/test/lab_fill_open",
                     axum::routing::post(rest::post_lab_fill_open),
                 )
+                .route(
+                    "/test/fail_open_orders",
+                    axum::routing::post(rest::post_fail_open_orders),
+                )
                 .with_state(state);
 
             let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");

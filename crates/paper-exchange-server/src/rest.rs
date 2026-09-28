@@ -8,8 +8,11 @@ use paper_exchange_core::types::{Balance, Execution, Order, OrderStatus, Side};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use serde::Serialize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::oneshot;
+
+static FAIL_OPEN_ORDERS: AtomicBool = AtomicBool::new(false);
 
 pub async fn get_balances(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
@@ -78,6 +81,10 @@ pub async fn get_open_orders(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     Query(q): Query<OpenOrdersQuery>,
 ) -> Result<Json<Vec<OpenOrderDto>>, StatusCode> {
+    if FAIL_OPEN_ORDERS.load(Ordering::SeqCst) {
+        tracing::warn!("lab fail_open_orders: GET /open_orders returning 503");
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
     let (tx, rx) = oneshot::channel();
     if state
         .rest_query_tx
@@ -340,6 +347,7 @@ pub async fn post_reset_lab_faults(
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
     rx.await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    FAIL_OPEN_ORDERS.store(false, Ordering::SeqCst);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -484,4 +492,9 @@ pub async fn post_lab_fill_open(
         }))),
         Err(_) => Err(StatusCode::CONFLICT),
     }
+}
+
+pub async fn post_fail_open_orders() -> Result<StatusCode, StatusCode> {
+    FAIL_OPEN_ORDERS.store(true, Ordering::SeqCst);
+    Ok(StatusCode::NO_CONTENT)
 }

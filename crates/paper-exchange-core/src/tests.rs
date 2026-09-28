@@ -720,3 +720,42 @@ fn lab_fill_open_partial_then_cancel_remainder() {
     assert_eq!(positions[0].quantity, decimal("0.001"));
     assert!(exchange.get_open_orders(None).is_empty());
 }
+
+#[test]
+fn lab_fill_then_duplicate_keeps_working_remainder() {
+    let (mut exchange, _, mut private_rx) = PaperExchange::new(linear_config());
+    exchange
+        .inject_orderbook(linear_book("50000", "49900"))
+        .unwrap();
+    exchange
+        .place_order(OrderRequest {
+            instrument_id: InstrumentId::new("BTC-USDT"),
+            side: Side::Buy,
+            order_type: OrderType::Limit,
+            quantity: decimal("0.002"),
+            limit_price: Some(decimal("49000")),
+            client_order_id: Some(ClientOrderId("dup-partial".into())),
+            reduce_only: false,
+        })
+        .unwrap();
+    exchange.duplicate_next_fill();
+    let filled = exchange.lab_fill_open(decimal("0.001")).unwrap();
+    assert_eq!(filled.status, OrderStatus::PartiallyFilled);
+    assert_eq!(filled.filled_qty, decimal("0.001"));
+    let mut fill_ids = Vec::new();
+    while let Ok(ev) = private_rx.try_recv() {
+        if let PrivateEvent::Execution(e) = ev.payload {
+            if e.quantity > Decimal::ZERO {
+                fill_ids.push(e.trade_id);
+            }
+        }
+    }
+    assert_eq!(fill_ids.len(), 2);
+    assert_eq!(fill_ids[0], fill_ids[1]);
+    let open = exchange.get_open_orders(None);
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0].filled_qty, decimal("0.001"));
+    assert_eq!(open[0].quantity - open[0].filled_qty, decimal("0.001"));
+    let (_, positions) = exchange.get_snapshot_data();
+    assert_eq!(positions[0].quantity, decimal("0.001"));
+}
