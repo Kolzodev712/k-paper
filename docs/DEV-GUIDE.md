@@ -2,7 +2,7 @@
 
 How to run, configure, and integrate against the paper exchange server. For wire-level message formats, see [CLIENT-INSTRUCTIONS.md](CLIENT-INSTRUCTIONS.md), [API-EXECUTION.md](API-EXECUTION.md), and [API-MARKET-DATA.md](API-MARKET-DATA.md).
 
-For the Candidate #2 cross-repository roadmap and the futures/fault gaps, see [PROP_TRADING_INTEGRATION_GUIDE.md](PROP_TRADING_INTEGRATION_GUIDE.md). The current Spot-oriented server is the starting point, not the finished Paper qualification venue.
+For increment status and next gates, see [PROP_TRADING_INTEGRATION_GUIDE.md](PROP_TRADING_INTEGRATION_GUIDE.md) and the [trading_system progression doc](https://github.com/Kolzodev712/trading_system/blob/master/docs/PROGRESSION.md). This guide describes how to run the server as it exists (Spot smoke and linear lab).
 
 ---
 

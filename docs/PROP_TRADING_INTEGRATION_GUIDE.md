@@ -1,6 +1,6 @@
 # Prop trading integration guide for K-paper
 
-**Status:** Increment 9A is accepted locally as a Paper qualification (linear fixtures + lab faults, including `fail_open_orders`). Increment 10 is accepted as bounded Bybit Demo operational qualification in `trading_system` (synthetic signal); this repo is not that Demo venue. Candidate #2 remains an operational baseline, not validated alpha. Not production complete. Not mainnet.
+**Status:** This file is this repo's increment record. Current open work and next gates: [trading_system progression](https://github.com/Kolzodev712/trading_system/blob/master/docs/PROGRESSION.md). Increment 9A is accepted locally as a Paper qualification (linear fixtures + lab faults, including `fail_open_orders`). Increment 10 is accepted as bounded Bybit Demo operational qualification in `trading_system` (synthetic signal); this repo is not that Demo venue. Candidate #2 remains an operational baseline, not validated alpha. Not production complete. Not mainnet.
 
 **Primary plan:** [Prop Trading Productionization and Research Architecture Plan](https://github.com/Kolzodev712/trading_system/blob/master/docs/PROP_TRADING_RESEARCH_AND_PRODUCTION_PLAN.md), especially sections 6, 48–49 and Increments 5R, 5B, 6, 7 and 9A.
 

@@ -6,13 +6,11 @@ Standalone paper exchange: orderbook, order lifecycle, matching, account state, 
 - **Design:** [proposals/paper-exchange-v1.md](proposals/paper-exchange-v1.md) — preliminary design plan (v1); implement from there.
 - **Layout:** Workspace with `paper-exchange-core` (library), `paper-exchange-scenarios`, and `paper-exchange-server`.
 
-## Current scope and prop-trading work
+## Current scope
 
-The core, HTTP/WebSocket server, market scenarios, **one-way USDT-linear BTCUSDT fixtures**, client-id lookup, and Increment 9A lab fault hooks (including `fail_open_orders`) exist. Increment 9A is accepted locally as the Paper qualification venue. Increment 10 (Bybit Demo) does not change this server.
+The core, HTTP/WebSocket server, market scenarios, **one-way USDT-linear BTCUSDT fixtures**, client-id lookup, and lab fault hooks (including `fail_open_orders`) exist. This is a controlled laboratory, not Bybit API parity and not production/mainnet. Paper process restart still loses the in-memory account.
 
-This is a controlled laboratory, not Bybit API parity and not production/mainnet. Candidate #2 remains an operational baseline, not validated alpha. Paper process restart still loses the in-memory account.
-
-For Candidate #2 work, follow [docs/PROP_TRADING_INTEGRATION_GUIDE.md](docs/PROP_TRADING_INTEGRATION_GUIDE.md) together with the [primary trading-system roadmap](https://github.com/Kolzodev712/trading_system/blob/master/docs/PROP_TRADING_RESEARCH_AND_PRODUCTION_PLAN.md). Spot/levels `sample_config/k-paper` remains a connectivity smoke path; linear C2→Paper is the Increment 9A qualification, not that smoke path.
+Increment status and next gates live in the [trading_system progression doc](https://github.com/Kolzodev712/trading_system/blob/master/docs/PROGRESSION.md). This repo's increment notes: [docs/PROP_TRADING_INTEGRATION_GUIDE.md](docs/PROP_TRADING_INTEGRATION_GUIDE.md). Spot/levels smoke (`sample_config/k-paper` in the runner) is not the linear Candidate #2 Paper lab.
 
 ## Build and run
 
@@ -26,7 +24,7 @@ cargo test --all -- --test-threads=1
 
 The main executable is **k-paper** at the repo root (`src/main.rs`). It delegates to the server; `cargo run` starts the paper exchange.
 
-**Documentation:** [docs/DEV-GUIDE.md](docs/DEV-GUIDE.md) — how to run (lab vs dev), configure YAML, scenarios, REST/WS integration, and pitfalls. The [prop-trading integration guide](docs/PROP_TRADING_INTEGRATION_GUIDE.md) is the Cursor handoff. API message schemas: [docs/CLIENT-INSTRUCTIONS.md](docs/CLIENT-INSTRUCTIONS.md), [docs/API-EXECUTION.md](docs/API-EXECUTION.md), [docs/API-MARKET-DATA.md](docs/API-MARKET-DATA.md).
+**Documentation:** [docs/DEV-GUIDE.md](docs/DEV-GUIDE.md) — how to run (lab vs dev), configure YAML, scenarios, REST/WS integration, and pitfalls. Increment notes: [prop-trading integration guide](docs/PROP_TRADING_INTEGRATION_GUIDE.md). API message schemas: [docs/CLIENT-INSTRUCTIONS.md](docs/CLIENT-INSTRUCTIONS.md), [docs/API-EXECUTION.md](docs/API-EXECUTION.md), [docs/API-MARKET-DATA.md](docs/API-MARKET-DATA.md).
 
 ## Crates
 
