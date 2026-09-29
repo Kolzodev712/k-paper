@@ -1,6 +1,6 @@
 # Prop trading integration guide for K-paper
 
-**Status:** Increment 9A lab hooks now include drop/partial fill, position-before-fill, lying WS position, lab_fill_open, and fail_open_orders. Matching runner 9A matrix is reported locally and waits owner re-review. Increment 9 runner ledger remains accepted. Candidate #2 remains an operational baseline, not validated alpha. Bybit demo is not started.
+**Status:** Increment 9A is accepted locally as a Paper qualification (linear fixtures + lab faults, including `fail_open_orders`). Increment 10 is accepted as bounded Bybit Demo operational qualification in `trading_system` (synthetic signal); this repo is not that Demo venue. Candidate #2 remains an operational baseline, not validated alpha. Not production complete. Not mainnet.
 
 **Primary plan:** [Prop Trading Productionization and Research Architecture Plan](https://github.com/Kolzodev712/trading_system/blob/master/docs/PROP_TRADING_RESEARCH_AND_PRODUCTION_PLAN.md), especially sections 6, 48–49 and Increments 5R, 5B, 6, 7 and 9A.
 
@@ -22,7 +22,7 @@ Increment 5R in `trading_system` moves Candidate #2's concrete adapter into a th
 
 The producer and consumer protocol must change together. Record both repository revisions in every cross-repo run.
 
-## Current baseline: do not overclaim it
+## Current baseline: laboratory, not Bybit
 
 | Available today | Important limit |
 | --- | --- |

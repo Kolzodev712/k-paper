@@ -8,9 +8,11 @@ Standalone paper exchange: orderbook, order lifecycle, matching, account state, 
 
 ## Current scope and prop-trading work
 
-The core, HTTP/WebSocket server, market scenarios and basic integration tests exist. The account/fill behavior is spot-style; the checked-in server is **not yet** a linear-perpetual futures simulator or a deterministic exchange/transport fault lab.
+The core, HTTP/WebSocket server, market scenarios, **one-way USDT-linear BTCUSDT fixtures**, client-id lookup, and Increment 9A lab fault hooks (including `fail_open_orders`) exist. Increment 9A is accepted locally as the Paper qualification venue. Increment 10 (Bybit Demo) does not change this server.
 
-For Candidate #2 work, follow [docs/PROP_TRADING_INTEGRATION_GUIDE.md](docs/PROP_TRADING_INTEGRATION_GUIDE.md) together with the [primary trading-system roadmap](https://github.com/Kolzodev712/trading_system/blob/master/docs/PROP_TRADING_RESEARCH_AND_PRODUCTION_PLAN.md). That guide separates the existing Spot connectivity smoke test from the future one-way futures, recovery and fault-injection qualification gates.
+This is a controlled laboratory, not Bybit API parity and not production/mainnet. Candidate #2 remains an operational baseline, not validated alpha. Paper process restart still loses the in-memory account.
+
+For Candidate #2 work, follow [docs/PROP_TRADING_INTEGRATION_GUIDE.md](docs/PROP_TRADING_INTEGRATION_GUIDE.md) together with the [primary trading-system roadmap](https://github.com/Kolzodev712/trading_system/blob/master/docs/PROP_TRADING_RESEARCH_AND_PRODUCTION_PLAN.md). Spot/levels `sample_config/k-paper` remains a connectivity smoke path; linear C2→Paper is the Increment 9A qualification, not that smoke path.
 
 ## Build and run
 

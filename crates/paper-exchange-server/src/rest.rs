@@ -81,9 +81,9 @@ pub async fn get_open_orders(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     Query(q): Query<OpenOrdersQuery>,
 ) -> Result<Json<Vec<OpenOrderDto>>, StatusCode> {
-    if FAIL_OPEN_ORDERS.load(Ordering::SeqCst) {
+    if let Some(status) = open_orders_fault_status() {
         tracing::warn!("lab fail_open_orders: GET /open_orders returning 503");
-        return Err(StatusCode::SERVICE_UNAVAILABLE);
+        return Err(status);
     }
     let (tx, rx) = oneshot::channel();
     if state
@@ -497,4 +497,31 @@ pub async fn post_lab_fill_open(
 pub async fn post_fail_open_orders() -> Result<StatusCode, StatusCode> {
     FAIL_OPEN_ORDERS.store(true, Ordering::SeqCst);
     Ok(StatusCode::NO_CONTENT)
+}
+
+fn open_orders_fault_status() -> Option<StatusCode> {
+    if FAIL_OPEN_ORDERS.load(Ordering::SeqCst) {
+        Some(StatusCode::SERVICE_UNAVAILABLE)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn fail_open_orders_returns_503_until_reset() {
+        FAIL_OPEN_ORDERS.store(false, Ordering::SeqCst);
+        assert_eq!(open_orders_fault_status(), None);
+        let armed = post_fail_open_orders().await.expect("arm");
+        assert_eq!(armed, StatusCode::NO_CONTENT);
+        assert_eq!(
+            open_orders_fault_status(),
+            Some(StatusCode::SERVICE_UNAVAILABLE)
+        );
+        FAIL_OPEN_ORDERS.store(false, Ordering::SeqCst);
+        assert_eq!(open_orders_fault_status(), None);
+    }
 }
