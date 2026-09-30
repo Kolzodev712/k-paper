@@ -112,7 +112,7 @@ impl Account {
         }
     }
 
-    /// Apply a fill: release reserved side, credit the other side. Fee reduces credit.
+    /// Apply a fill: consume the reserved side and credit the other. Fee reduces quote credit.
     pub fn apply_fill(
         &mut self,
         side: Side,
@@ -121,20 +121,23 @@ impl Account {
         price: Decimal,
         quantity: Decimal,
         fee: Decimal,
-    ) {
+    ) -> Result<(), ExchangeError> {
         match side {
             Side::Buy => {
                 let quote_amount = price * quantity + fee;
                 self.release(quote_asset, quote_amount);
+                self.debit(quote_asset, quote_amount)?;
                 self.credit(base_asset, quantity);
             }
             Side::Sell => {
                 let base_amount = quantity;
-                let quote_amount = price * quantity - fee;
+                let quote_amount = (price * quantity - fee).max(Decimal::ZERO);
                 self.release(base_asset, base_amount);
+                self.debit(base_asset, base_amount)?;
                 self.credit(quote_asset, quote_amount);
             }
         }
+        Ok(())
     }
 
     /// USDT-linear fill: IM stays in USDT; no base/quote swap. Quantity is signed on the position.

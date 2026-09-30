@@ -797,3 +797,43 @@ fn lab_fill_open_targets_named_order_not_sibling() {
     assert_eq!(open.len(), 1);
     assert_eq!(open[0].order_id, b.order_id);
 }
+
+#[test]
+fn spot_sell_fill_consumes_base_inventory() {
+    let (mut exchange, _, _) = PaperExchange::new(test_config());
+    exchange
+        .inject_orderbook(OrderbookSnapshot {
+            instrument_id: InstrumentId::new("BTC-USDT"),
+            bids: vec![BookLevel {
+                price: decimal("50000"),
+                quantity: decimal("2"),
+            }],
+            asks: vec![BookLevel {
+                price: decimal("50100"),
+                quantity: decimal("1"),
+            }],
+            sequence: 1,
+            timestamp: Utc::now(),
+        })
+        .unwrap();
+    let placed = exchange
+        .place_order(OrderRequest {
+            instrument_id: InstrumentId::new("BTC-USDT"),
+            side: Side::Sell,
+            order_type: OrderType::Limit,
+            quantity: decimal("0.001"),
+            limit_price: Some(decimal("100000")),
+            client_order_id: Some(ClientOrderId("spot-sell".into())),
+            reduce_only: false,
+        })
+        .unwrap();
+    assert_eq!(placed.status, OrderStatus::New);
+    let filled = exchange
+        .lab_fill_open(decimal("0.001"), Some(&placed.order_id.to_string()))
+        .unwrap();
+    assert_eq!(filled.status, OrderStatus::Filled);
+    let (balances, _) = exchange.get_snapshot_data();
+    let btc = balances.iter().find(|b| b.asset.0 == "BTC").unwrap();
+    assert_eq!(btc.total, decimal("9.999"));
+    assert_eq!(btc.locked, Decimal::ZERO);
+}

@@ -81,6 +81,11 @@ pub enum RestQuery {
         order_id: Option<String>,
         reply: oneshot::Sender<Result<Order, String>>,
     },
+    EmitPlaceAck {
+        order_id: String,
+        omit_client_order_id: bool,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
 }
 
 pub async fn ws_handler(ws: WebSocketUpgrade, state: Arc<AppState>) -> Response {

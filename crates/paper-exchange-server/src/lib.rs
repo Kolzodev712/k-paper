@@ -162,6 +162,10 @@ pub fn run() {
                     axum::routing::post(rest::post_lab_fill_open),
                 )
                 .route(
+                    "/test/emit_place_ack",
+                    axum::routing::post(rest::post_emit_place_ack),
+                )
+                .route(
                     "/test/fail_open_orders",
                     axum::routing::post(rest::post_fail_open_orders),
                 )

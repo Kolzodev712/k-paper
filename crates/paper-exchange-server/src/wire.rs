@@ -183,3 +183,30 @@ impl From<paper_exchange_core::types::StreamEvent<paper_exchange_core::types::Pr
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use rust_decimal::Decimal;
+
+    #[test]
+    fn execution_ack_wire_includes_client_order_id() {
+        let exec = Execution {
+            order_id: OrderId::new(),
+            trade_id: TradeId::nil(),
+            instrument_id: InstrumentId::new("BTC-USDT"),
+            side: Side::Buy,
+            price: Decimal::new(1000, 0),
+            quantity: Decimal::ZERO,
+            fee: None,
+            timestamp: Utc::now(),
+            reject_reason: None,
+            client_order_id: Some(ClientOrderId("cid-1".into())),
+        };
+        let json = serde_json::to_string(&ServerMessage::Execution(exec)).unwrap();
+        assert!(json.contains("cid-1"), "{json}");
+        assert!(json.contains("client_order_id"), "{json}");
+        println!("{json}");
+    }
+}

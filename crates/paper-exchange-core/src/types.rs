@@ -240,6 +240,9 @@ pub struct Execution {
     pub fee: Option<Decimal>,
     pub timestamp: DateTime<Utc>,
     pub reject_reason: Option<String>,
+    /// Present on place ACKs (qty=0) so a delayed ACK cannot bind to another in-flight place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_order_id: Option<ClientOrderId>,
 }
 
 // ---------- Account ----------

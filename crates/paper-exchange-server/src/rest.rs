@@ -470,6 +470,35 @@ pub async fn post_emit_ws_position(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+pub struct EmitPlaceAckBody {
+    pub order_id: String,
+    #[serde(default)]
+    pub omit_client_order_id: bool,
+}
+
+pub async fn post_emit_place_ack(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    Json(body): Json<EmitPlaceAckBody>,
+) -> Result<StatusCode, StatusCode> {
+    let (tx, rx) = oneshot::channel();
+    if state
+        .rest_query_tx
+        .send(RestQuery::EmitPlaceAck {
+            order_id: body.order_id,
+            omit_client_order_id: body.omit_client_order_id,
+            reply: tx,
+        })
+        .is_err()
+    {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    match rx.await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)? {
+        Ok(()) => Ok(StatusCode::NO_CONTENT),
+        Err(_) => Err(StatusCode::CONFLICT),
+    }
+}
+
 pub async fn post_lab_fill_open(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     Json(body): Json<QtyBody>,

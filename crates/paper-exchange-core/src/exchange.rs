@@ -197,7 +197,7 @@ impl PaperExchange {
                 fill.price,
                 fill.quantity,
                 fee,
-            );
+            )?;
         }
 
         let exec = Execution {
@@ -210,6 +210,7 @@ impl PaperExchange {
             fee: Some(fee),
             timestamp: now,
             reject_reason: None,
+            client_order_id: order.client_order_id.clone(),
         };
         // Persist fill in in-memory trade history for REST /trades (bounded).
         self.trades.push(exec.clone());
@@ -300,17 +301,9 @@ impl PaperExchange {
             .place_order(req, &mut self.account, now)?;
 
         if !suppress {
-            self.send_private(PrivateEvent::Execution(Execution {
-                order_id: order.order_id,
-                trade_id: TradeId::nil(),
-                instrument_id: order.instrument_id.clone(),
-                side: order.side.clone(),
-                price: order.price,
-                quantity: Decimal::ZERO,
-                fee: None,
-                timestamp: now,
-                reject_reason: None,
-            }));
+            self.send_private(PrivateEvent::Execution(Self::place_ack_execution(
+                &order, now, false,
+            )));
         }
 
         self.run_matching()?;
@@ -431,6 +424,53 @@ impl PaperExchange {
             entry_price,
             unrealized_pnl: Some(Decimal::ZERO),
         }));
+    }
+
+    fn place_ack_execution(
+        order: &Order,
+        now: chrono::DateTime<Utc>,
+        omit_client_order_id: bool,
+    ) -> Execution {
+        Execution {
+            order_id: order.order_id,
+            trade_id: TradeId::nil(),
+            instrument_id: order.instrument_id.clone(),
+            side: order.side.clone(),
+            price: order.price,
+            quantity: Decimal::ZERO,
+            fee: None,
+            timestamp: now,
+            reject_reason: None,
+            client_order_id: if omit_client_order_id {
+                None
+            } else {
+                order.client_order_id.clone()
+            },
+        }
+    }
+
+    /// Emit a delayed place ACK for `order_id`. Used to inject a wrong ACK while
+    /// another place is in flight. `omit_client_order_id` reproduces the legacy
+    /// uncorrelated ACK.
+    pub fn emit_place_ack(
+        &mut self,
+        order_id: &str,
+        omit_client_order_id: bool,
+    ) -> Result<(), ExchangeError> {
+        let uuid = uuid::Uuid::parse_str(order_id.trim()).map_err(|_| {
+            ExchangeError::Validation(format!("invalid emit_place_ack order id {order_id}"))
+        })?;
+        let order = self
+            .order_manager
+            .get_order(OrderId(uuid))
+            .cloned()
+            .ok_or_else(|| ExchangeError::Validation(format!("order {order_id} not found")))?;
+        self.send_private(PrivateEvent::Execution(Self::place_ack_execution(
+            &order,
+            self.now(),
+            omit_client_order_id,
+        )));
+        Ok(())
     }
 
     /// Fill `qty` of a named open order, or the oldest open order if `order_id` is omitted.

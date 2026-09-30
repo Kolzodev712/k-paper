@@ -279,6 +279,16 @@ fn handle_rest_query(exchange: &mut PaperExchange, q: RestQuery) {
                 .map_err(|e| e.to_string());
             let _ = reply.send(result);
         }
+        RestQuery::EmitPlaceAck {
+            order_id,
+            omit_client_order_id,
+            reply,
+        } => {
+            let result = exchange
+                .emit_place_ack(&order_id, omit_client_order_id)
+                .map_err(|e| e.to_string());
+            let _ = reply.send(result);
+        }
         RestQuery::Positions(reply) => {
             let positions = exchange.get_snapshot_data().1;
             let _ = reply.send(positions);
