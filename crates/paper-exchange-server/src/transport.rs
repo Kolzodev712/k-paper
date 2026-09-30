@@ -78,6 +78,7 @@ pub enum RestQuery {
     },
     LabFillOpen {
         qty: rust_decimal::Decimal,
+        order_id: Option<String>,
         reply: oneshot::Sender<Result<Order, String>>,
     },
 }

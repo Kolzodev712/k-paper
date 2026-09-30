@@ -269,8 +269,14 @@ fn handle_rest_query(exchange: &mut PaperExchange, q: RestQuery) {
             exchange.emit_ws_position(quantity, entry_price);
             let _ = reply.send(());
         }
-        RestQuery::LabFillOpen { qty, reply } => {
-            let result = exchange.lab_fill_open(qty).map_err(|e| e.to_string());
+        RestQuery::LabFillOpen {
+            qty,
+            order_id,
+            reply,
+        } => {
+            let result = exchange
+                .lab_fill_open(qty, order_id.as_deref())
+                .map_err(|e| e.to_string());
             let _ = reply.send(result);
         }
         RestQuery::Positions(reply) => {

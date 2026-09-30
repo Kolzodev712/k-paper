@@ -739,7 +739,7 @@ fn lab_fill_then_duplicate_keeps_working_remainder() {
         })
         .unwrap();
     exchange.duplicate_next_fill();
-    let filled = exchange.lab_fill_open(decimal("0.001")).unwrap();
+    let filled = exchange.lab_fill_open(decimal("0.001"), None).unwrap();
     assert_eq!(filled.status, OrderStatus::PartiallyFilled);
     assert_eq!(filled.filled_qty, decimal("0.001"));
     let mut fill_ids = Vec::new();
@@ -758,4 +758,42 @@ fn lab_fill_then_duplicate_keeps_working_remainder() {
     assert_eq!(open[0].quantity - open[0].filled_qty, decimal("0.001"));
     let (_, positions) = exchange.get_snapshot_data();
     assert_eq!(positions[0].quantity, decimal("0.001"));
+}
+
+#[test]
+fn lab_fill_open_targets_named_order_not_sibling() {
+    let (mut exchange, _, _) = PaperExchange::new(linear_config());
+    exchange
+        .inject_orderbook(linear_book("50000", "49900"))
+        .unwrap();
+    let a = exchange
+        .place_order(OrderRequest {
+            instrument_id: InstrumentId::new("BTC-USDT"),
+            side: Side::Buy,
+            order_type: OrderType::Limit,
+            quantity: decimal("0.002"),
+            limit_price: Some(decimal("48000")),
+            client_order_id: Some(ClientOrderId("cid-a".into())),
+            reduce_only: false,
+        })
+        .unwrap();
+    let b = exchange
+        .place_order(OrderRequest {
+            instrument_id: InstrumentId::new("BTC-USDT"),
+            side: Side::Buy,
+            order_type: OrderType::Limit,
+            quantity: decimal("0.002"),
+            limit_price: Some(decimal("47000")),
+            client_order_id: Some(ClientOrderId("cid-b".into())),
+            reduce_only: false,
+        })
+        .unwrap();
+    let filled = exchange
+        .lab_fill_open(decimal("0.002"), Some(&a.order_id.to_string()))
+        .unwrap();
+    assert_eq!(filled.order_id, a.order_id);
+    assert_eq!(filled.status, OrderStatus::Filled);
+    let open = exchange.get_open_orders(None);
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0].order_id, b.order_id);
 }

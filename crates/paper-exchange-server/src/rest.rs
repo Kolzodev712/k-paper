@@ -404,6 +404,8 @@ pub async fn post_drop_next_place(
 pub struct QtyBody {
     #[serde(default)]
     pub qty: Option<Decimal>,
+    #[serde(default)]
+    pub order_id: Option<String>,
 }
 
 pub async fn post_partial_next_fill(
@@ -477,6 +479,7 @@ pub async fn post_lab_fill_open(
         .rest_query_tx
         .send(RestQuery::LabFillOpen {
             qty: body.qty.unwrap_or(Decimal::ZERO),
+            order_id: body.order_id,
             reply: tx,
         })
         .is_err()

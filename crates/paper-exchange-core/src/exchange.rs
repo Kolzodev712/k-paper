@@ -433,15 +433,29 @@ impl PaperExchange {
         }));
     }
 
-    /// Fill `qty` of the first open order against the current book price.
-    pub fn lab_fill_open(&mut self, qty: Decimal) -> Result<Order, ExchangeError> {
-        let order = self
-            .order_manager
-            .open_orders()
-            .into_iter()
-            .next()
-            .cloned()
-            .ok_or_else(|| ExchangeError::Validation("no open order to fill".into()))?;
+    /// Fill `qty` of a named open order, or the oldest open order if `order_id` is omitted.
+    /// HashMap iteration is not a stable owner, so two-level labs must name the target.
+    pub fn lab_fill_open(
+        &mut self,
+        qty: Decimal,
+        order_id: Option<&str>,
+    ) -> Result<Order, ExchangeError> {
+        let order = if let Some(raw) = order_id.map(str::trim).filter(|s| !s.is_empty()) {
+            let uuid = uuid::Uuid::parse_str(raw).map_err(|_| {
+                ExchangeError::Validation(format!("invalid lab fill order id {raw}"))
+            })?;
+            self.order_manager
+                .get_order(OrderId(uuid))
+                .cloned()
+                .ok_or_else(|| ExchangeError::Validation(format!("order {raw} not found")))?
+        } else {
+            self.order_manager
+                .open_orders()
+                .into_iter()
+                .min_by_key(|o| o.created_at)
+                .cloned()
+                .ok_or_else(|| ExchangeError::Validation("no open order to fill".into()))?
+        };
         let remaining = order.quantity - order.filled_qty;
         if remaining <= Decimal::ZERO {
             return Err(ExchangeError::Validation(
