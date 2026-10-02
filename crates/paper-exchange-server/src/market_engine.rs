@@ -158,7 +158,7 @@ fn build_snapshots(
                 }
             })
             .collect();
-        bids.sort_by(|a, b| b.price.cmp(&a.price));
+        bids.sort_by_key(|a| std::cmp::Reverse(a.price));
 
         let mut asks: Vec<BookLevel> = (0..config.levels)
             .map(|i| {
@@ -170,7 +170,7 @@ fn build_snapshots(
                 }
             })
             .collect();
-        asks.sort_by(|a, b| a.price.cmp(&b.price));
+        asks.sort_by_key(|a| a.price);
 
         dynamics.sequence += 1;
         let snapshot = OrderbookSnapshot {

@@ -36,6 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ],
         fill_model: FillModelConfig::default(),
         max_trade_history: 10_000,
+        linear: None,
     };
 
     let (mut exchange, _market_rx, _private_rx) = PaperExchange::new(config);
@@ -73,6 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         quantity: decimal("0.1"),
         limit_price: Some(Decimal::try_from(mid + 200.0).unwrap()),
         client_order_id: None,
+        reduce_only: false,
     });
 
     eprintln!("Procedural demo: injected 20 random-walk snapshots and placed one limit buy.");

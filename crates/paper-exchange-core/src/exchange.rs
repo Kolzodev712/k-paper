@@ -178,17 +178,17 @@ impl PaperExchange {
 
         if linear {
             let leverage = self.config.linear.as_ref().map(|c| c.leverage).unwrap_or(1);
-            self.account.apply_linear_fill(
-                &instrument.quote_asset,
-                &order.instrument_id,
-                order.side.clone(),
-                fill.price,
-                fill.quantity,
+            self.account.apply_linear_fill(crate::account::LinearFill {
+                quote_asset: &instrument.quote_asset,
+                instrument_id: &order.instrument_id,
+                side: order.side.clone(),
+                price: fill.price,
+                quantity: fill.quantity,
                 fee,
                 reducing,
                 leverage,
-                fill.price,
-            )?;
+                mark: fill.price,
+            })?;
         } else {
             self.account.apply_fill(
                 order.side.clone(),

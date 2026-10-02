@@ -12,6 +12,19 @@ pub struct Account {
     positions: HashMap<InstrumentId, Position>,
 }
 
+/// Parameters for a USDT-linear fill. Quantity is signed onto the position.
+pub struct LinearFill<'a> {
+    pub quote_asset: &'a Asset,
+    pub instrument_id: &'a InstrumentId,
+    pub side: Side,
+    pub price: Decimal,
+    pub quantity: Decimal,
+    pub fee: Decimal,
+    pub reducing: bool,
+    pub leverage: u32,
+    pub mark: Decimal,
+}
+
 impl Account {
     pub fn new(initial_balances: &[crate::config::InitialBalance]) -> Self {
         let mut balances = HashMap::new();
@@ -141,53 +154,42 @@ impl Account {
     }
 
     /// USDT-linear fill: IM stays in USDT; no base/quote swap. Quantity is signed on the position.
-    pub fn apply_linear_fill(
-        &mut self,
-        quote_asset: &Asset,
-        instrument_id: &InstrumentId,
-        side: Side,
-        price: Decimal,
-        quantity: Decimal,
-        fee: Decimal,
-        reducing: bool,
-        leverage: u32,
-        mark: Decimal,
-    ) -> Result<(), ExchangeError> {
-        if fee > Decimal::ZERO {
-            self.debit(quote_asset, fee)?;
+    pub fn apply_linear_fill(&mut self, fill: LinearFill<'_>) -> Result<(), ExchangeError> {
+        if fill.fee > Decimal::ZERO {
+            self.debit(fill.quote_asset, fill.fee)?;
         }
 
         let current = self
-            .get_position(instrument_id)
+            .get_position(fill.instrument_id)
             .map(|p| (p.quantity, p.entry_price))
             .unwrap_or((Decimal::ZERO, Decimal::ZERO));
         let (cur_qty, entry) = current;
-        let delta = signed_fill_qty(&side, quantity);
+        let delta = signed_fill_qty(&fill.side, fill.quantity);
         let next_qty = cur_qty + delta;
 
-        if reducing {
-            let closed = quantity.min(cur_qty.abs());
-            let realized = if cur_qty > Decimal::ZERO && matches!(side, Side::Sell) {
-                (price - entry) * closed
-            } else if cur_qty < Decimal::ZERO && matches!(side, Side::Buy) {
-                (entry - price) * closed
+        if fill.reducing {
+            let closed = fill.quantity.min(cur_qty.abs());
+            let realized = if cur_qty > Decimal::ZERO && matches!(fill.side, Side::Sell) {
+                (fill.price - entry) * closed
+            } else if cur_qty < Decimal::ZERO && matches!(fill.side, Side::Buy) {
+                (entry - fill.price) * closed
             } else {
                 Decimal::ZERO
             };
-            let im = initial_margin(closed * entry, leverage).unwrap_or(Decimal::ZERO);
-            self.release(quote_asset, im);
+            let im = initial_margin(closed * entry, fill.leverage).unwrap_or(Decimal::ZERO);
+            self.release(fill.quote_asset, im);
             if realized > Decimal::ZERO {
-                self.credit(quote_asset, realized);
+                self.credit(fill.quote_asset, realized);
             } else if realized < Decimal::ZERO {
-                self.debit(quote_asset, -realized)?;
+                self.debit(fill.quote_asset, -realized)?;
             }
         }
 
-        let new_entry = if !reducing && next_qty.abs() > Decimal::ZERO {
+        let new_entry = if !fill.reducing && next_qty.abs() > Decimal::ZERO {
             if cur_qty == Decimal::ZERO || (cur_qty.is_sign_positive() == delta.is_sign_positive())
             {
                 let prev_notional = entry * cur_qty.abs();
-                let add_notional = price * quantity;
+                let add_notional = fill.price * fill.quantity;
                 (prev_notional + add_notional) / next_qty.abs()
             } else {
                 entry
@@ -206,10 +208,10 @@ impl Account {
         let upnl = if next_qty == Decimal::ZERO {
             Decimal::ZERO
         } else {
-            (mark - new_entry) * next_qty
+            (fill.mark - new_entry) * next_qty
         };
         self.update_position(Position {
-            instrument_id: instrument_id.clone(),
+            instrument_id: fill.instrument_id.clone(),
             side: side_out,
             quantity: next_qty,
             entry_price: new_entry,

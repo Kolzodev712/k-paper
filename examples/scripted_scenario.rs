@@ -61,6 +61,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ],
         fill_model: FillModelConfig::default(),
         max_trade_history: 10_000,
+        linear: None,
     };
 
     let (mut exchange, mut market_rx, mut private_rx) = PaperExchange::new(config);
@@ -144,6 +145,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     quantity: decimal(&ev.quantity.unwrap_or_default()),
                     limit_price: ev.price.map(|p| decimal(&p)),
                     client_order_id: None,
+                    reduce_only: false,
                 };
                 if let Ok(order) = exchange.place_order(req) {
                     eprintln!("  placed order {} -> {:?}", order.order_id, order.status);
