@@ -113,13 +113,13 @@ impl InstrumentOrderbook {
 
 #[derive(Clone, Debug, Default)]
 pub struct Orderbook {
-    books: std::collections::HashMap<InstrumentId, InstrumentOrderbook>,
+    books: std::collections::BTreeMap<InstrumentId, InstrumentOrderbook>,
 }
 
 impl Orderbook {
     pub fn new() -> Self {
         Self {
-            books: std::collections::HashMap::new(),
+            books: std::collections::BTreeMap::new(),
         }
     }
 

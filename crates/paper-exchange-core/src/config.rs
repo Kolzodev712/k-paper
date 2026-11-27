@@ -44,8 +44,8 @@ pub struct Config {
     pub instruments: Vec<Instrument>,
     pub initial_balances: Vec<InitialBalance>,
     pub fill_model: FillModelConfig,
-    /// Max fills kept for REST `/trades` (0 = unlimited).
-    #[serde(default)]
+    /// Max fills kept for REST `/trades` (0 = unlimited). Defaults to 10 000 when absent from JSON.
+    #[serde(default = "default_max_trade_history")]
     pub max_trade_history: usize,
     /// When set, instruments with `instrument_type: futures` use one-way USDT-linear accounting.
     #[serde(default)]

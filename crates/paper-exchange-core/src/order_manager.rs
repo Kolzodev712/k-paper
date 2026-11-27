@@ -5,24 +5,43 @@ use crate::error::ExchangeError;
 use crate::types::{AmendRequest, CancelRequest, Order, OrderRequest, OrderStatus, Side};
 use chrono::Utc;
 use rust_decimal::Decimal;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use crate::account::Account;
 use crate::validation::validate_order_request;
 
 pub struct OrderManager {
-    config: Config,
+    config: Arc<Config>,
     orders_by_id: HashMap<crate::types::OrderId, Order>,
     orders_by_client_id: HashMap<crate::types::ClientOrderId, crate::types::OrderId>,
+    /// Open (New/PartiallyFilled) order ids keyed by placement sequence. Gives matching,
+    /// `open_orders()` and `cancel_all` a stable, insertion-ordered iteration that never scans
+    /// historic (filled/canceled) orders.
+    open_by_seq: BTreeMap<u64, crate::types::OrderId>,
+    /// Reverse index for `open_by_seq` (only open orders are present).
+    open_seq_by_order: HashMap<crate::types::OrderId, u64>,
+    next_order_seq: u64,
+    /// When set, `OrderId`s are derived from the placement sequence instead of random UUIDs.
+    deterministic_ids: bool,
 }
 
 impl OrderManager {
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: impl Into<Arc<Config>>) -> Self {
         Self {
-            config,
+            config: config.into(),
             orders_by_id: HashMap::new(),
             orders_by_client_id: HashMap::new(),
+            open_by_seq: BTreeMap::new(),
+            open_seq_by_order: HashMap::new(),
+            next_order_seq: 1,
+            deterministic_ids: false,
         }
+    }
+
+    /// Derive `OrderId`s from the placement sequence (replay / deterministic tests).
+    pub fn set_deterministic_ids(&mut self, on: bool) {
+        self.deterministic_ids = on;
     }
 
     fn get_instrument(
@@ -101,13 +120,19 @@ impl OrderManager {
             account.reserve(reserve_asset, reserve_amount)?;
         }
 
-        let order_id = crate::types::OrderId::new();
+        let seq = self.next_order_seq;
+        self.next_order_seq += 1;
+        let order_id = if self.deterministic_ids {
+            crate::types::OrderId::from_seq(seq)
+        } else {
+            crate::types::OrderId::new()
+        };
         let order = Order {
             order_id,
             client_order_id: req.client_order_id.clone(),
             instrument_id: req.instrument_id.clone(),
-            side: req.side.clone(),
-            order_type: req.order_type.clone(),
+            side: req.side,
+            order_type: req.order_type,
             quantity: req.quantity,
             price,
             filled_qty: Decimal::ZERO,
@@ -118,6 +143,8 @@ impl OrderManager {
         };
 
         self.orders_by_id.insert(order_id, order.clone());
+        self.open_by_seq.insert(seq, order_id);
+        self.open_seq_by_order.insert(order_id, seq);
         if let Some(ref cid) = req.client_order_id {
             self.orders_by_client_id.insert(cid.clone(), order_id);
         }
@@ -138,8 +165,29 @@ impl OrderManager {
                 .get(cid)
                 .ok_or(ExchangeError::OrderNotFound)?,
         };
+        self.close_order(order_id, OrderStatus::Canceled, account, now)
+    }
 
-        let (instrument_id, side, quantity, price, filled_qty, _client_order_id, reduce_only) = {
+    /// Reject an open order (e.g. its fill could not be funded): release the remaining reserve
+    /// and mark it `Rejected`.
+    pub fn reject_order(
+        &mut self,
+        order_id: crate::types::OrderId,
+        account: &mut Account,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<Order, ExchangeError> {
+        self.close_order(order_id, OrderStatus::Rejected, account, now)
+    }
+
+    /// Release the unfilled reserve of an open order and move it to a terminal `status`.
+    fn close_order(
+        &mut self,
+        order_id: crate::types::OrderId,
+        status: OrderStatus,
+        account: &mut Account,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<Order, ExchangeError> {
+        let (instrument_id, side, quantity, price, filled_qty, reduce_only) = {
             let order = self
                 .orders_by_id
                 .get(&order_id)
@@ -155,11 +203,10 @@ impl OrderManager {
             }
             (
                 order.instrument_id.clone(),
-                order.side.clone(),
+                order.side,
                 order.quantity,
                 order.price,
                 order.filled_qty,
-                order.client_order_id.clone(),
                 order.reduce_only,
             )
         };
@@ -188,15 +235,16 @@ impl OrderManager {
             account.release(reserve_asset, release_amount);
         }
 
+        self.remove_from_open_index(order_id);
         let order = self.orders_by_id.get_mut(&order_id).unwrap();
-        order.status = OrderStatus::Canceled;
+        order.status = status;
         order.updated_at = now;
 
-        let out = order.clone();
-        Ok(out)
+        Ok(order.clone())
     }
 
-    /// Cancel every open order (New/PartiallyFilled). Returns the orders that were canceled.
+    /// Cancel every open order (New/PartiallyFilled) in placement order. Returns the orders that
+    /// were canceled.
     ///
     /// This is best-effort: if an order becomes non-cancelable between enumeration and cancel,
     /// it will be skipped and the rest will still be canceled.
@@ -205,8 +253,7 @@ impl OrderManager {
         account: &mut Account,
         now: chrono::DateTime<Utc>,
     ) -> Vec<Order> {
-        let ids: Vec<crate::types::OrderId> =
-            self.open_orders().into_iter().map(|o| o.order_id).collect();
+        let ids = self.open_order_ids();
         let mut out = Vec::with_capacity(ids.len());
         for id in ids {
             if let Ok(order) = self.cancel_order(CancelRequest::ByOrderId(id), account, now) {
@@ -295,14 +342,48 @@ impl OrderManager {
         self.orders_by_id.get(order_id)
     }
 
-    pub fn get_order_mut(&mut self, order_id: &crate::types::OrderId) -> Option<&mut Order> {
-        self.orders_by_id.get_mut(order_id)
+    /// Record a fill of `quantity` on an open order: bumps `filled_qty`, sets `PartiallyFilled` or
+    /// `Filled`, and drops the order from the open index once fully filled.
+    pub fn record_fill(
+        &mut self,
+        order_id: crate::types::OrderId,
+        quantity: Decimal,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<Order, ExchangeError> {
+        let order = self
+            .orders_by_id
+            .get_mut(&order_id)
+            .ok_or(ExchangeError::OrderNotFound)?;
+        order.filled_qty += quantity;
+        order.updated_at = now;
+        order.status = if order.filled_qty >= order.quantity {
+            OrderStatus::Filled
+        } else {
+            OrderStatus::PartiallyFilled
+        };
+        let out = order.clone();
+        if out.status == OrderStatus::Filled {
+            self.remove_from_open_index(order_id);
+        }
+        Ok(out)
     }
 
+    fn remove_from_open_index(&mut self, order_id: crate::types::OrderId) {
+        if let Some(seq) = self.open_seq_by_order.remove(&order_id) {
+            self.open_by_seq.remove(&seq);
+        }
+    }
+
+    /// Ids of open orders in placement order (oldest first).
+    pub fn open_order_ids(&self) -> Vec<crate::types::OrderId> {
+        self.open_by_seq.values().copied().collect()
+    }
+
+    /// Open orders in placement order (oldest first). Cost is O(open), not O(all orders ever).
     pub fn open_orders(&self) -> Vec<&Order> {
-        self.orders_by_id
+        self.open_by_seq
             .values()
-            .filter(|o| o.status == OrderStatus::New || o.status == OrderStatus::PartiallyFilled)
+            .filter_map(|id| self.orders_by_id.get(id))
             .collect()
     }
 

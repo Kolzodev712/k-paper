@@ -837,3 +837,300 @@ fn spot_sell_fill_consumes_base_inventory() {
     assert_eq!(btc.total, decimal("9.999"));
     assert_eq!(btc.locked, Decimal::ZERO);
 }
+
+// ---------- Atomic fills ----------
+
+fn book(bid: &str, ask: &str, ask_qty: &str, seq: u64) -> OrderbookSnapshot {
+    OrderbookSnapshot {
+        instrument_id: InstrumentId::new("BTC-USDT"),
+        bids: vec![BookLevel {
+            price: decimal(bid),
+            quantity: decimal("10"),
+        }],
+        asks: vec![BookLevel {
+            price: decimal(ask),
+            quantity: decimal(ask_qty),
+        }],
+        sequence: seq,
+        timestamp: Utc::now(),
+    }
+}
+
+fn buy_limit(qty: &str, price: &str) -> OrderRequest {
+    OrderRequest {
+        instrument_id: InstrumentId::new("BTC-USDT"),
+        side: Side::Buy,
+        order_type: OrderType::Limit,
+        quantity: decimal(qty),
+        limit_price: Some(decimal(price)),
+        client_order_id: None,
+        reduce_only: false,
+    }
+}
+
+#[test]
+fn market_buy_that_would_overspend_does_not_fill_or_mutate_account() {
+    let mut config = test_config();
+    config.initial_balances[0].amount = decimal("100"); // 100 USDT only
+    let (mut exchange, _, mut private_rx) = PaperExchange::new(config);
+    exchange
+        .inject_orderbook(book("49900", "50000", "1", 1))
+        .unwrap();
+
+    // Market buys reserve nothing (price 0) and pass the "has some quote" check, but 0.01 BTC at
+    // 50000 costs 500 USDT. Before the fix the order was marked Filled while the debit failed.
+    let placed = exchange
+        .place_order(OrderRequest {
+            instrument_id: InstrumentId::new("BTC-USDT"),
+            side: Side::Buy,
+            order_type: OrderType::Market,
+            quantity: decimal("0.01"),
+            limit_price: None,
+            client_order_id: Some(ClientOrderId("overspend".into())),
+            reduce_only: false,
+        })
+        .unwrap();
+
+    assert_ne!(placed.status, OrderStatus::Filled);
+    assert_eq!(placed.status, OrderStatus::Rejected);
+    assert_eq!(placed.filled_qty, Decimal::ZERO);
+    assert!(exchange.get_open_orders(None).is_empty());
+    assert!(exchange.get_trades(None, None).is_empty());
+
+    let (balances, _) = exchange.get_snapshot_data();
+    let usdt = balances.iter().find(|b| b.asset.0 == "USDT").unwrap();
+    let btc = balances.iter().find(|b| b.asset.0 == "BTC").unwrap();
+    assert_eq!(usdt.total, decimal("100"));
+    assert_eq!(usdt.available, decimal("100"));
+    assert_eq!(btc.total, decimal("10"));
+
+    let mut fills = 0;
+    let mut rejects = 0;
+    while let Ok(ev) = private_rx.try_recv() {
+        if let PrivateEvent::Execution(e) = ev.payload {
+            if e.quantity > Decimal::ZERO {
+                fills += 1;
+            }
+            if e.reject_reason.is_some() {
+                rejects += 1;
+            }
+        }
+    }
+    assert_eq!(fills, 0);
+    assert_eq!(rejects, 1);
+}
+
+#[test]
+fn unfundable_order_does_not_block_later_orders() {
+    let mut config = test_config();
+    config.initial_balances[0].amount = decimal("100");
+    let (mut exchange, _, _) = PaperExchange::new(config);
+    exchange
+        .place_order(OrderRequest {
+            instrument_id: InstrumentId::new("BTC-USDT"),
+            side: Side::Buy,
+            order_type: OrderType::Market,
+            quantity: decimal("0.01"),
+            limit_price: None,
+            client_order_id: Some(ClientOrderId("mkt".into())),
+            reduce_only: false,
+        })
+        .unwrap();
+    let limit = exchange.place_order(buy_limit("0.001", "40000")).unwrap(); // 40 USDT reserved
+    assert_eq!(limit.status, OrderStatus::New);
+
+    // Book crosses both: the unfunded market order is rejected, the funded limit still fills.
+    exchange
+        .inject_orderbook(book("49900", "39000", "1", 1))
+        .unwrap();
+    let mkt = exchange.get_order_by_client_id("mkt").unwrap();
+    assert_eq!(mkt.status, OrderStatus::Rejected);
+    assert!(exchange.get_open_orders(None).is_empty());
+    assert_eq!(exchange.get_trades(None, None).len(), 1);
+}
+
+#[test]
+fn account_apply_fill_is_atomic_on_insufficient_balance() {
+    use crate::account::Account;
+    let usdt = Asset("USDT".into());
+    let btc = Asset("BTC".into());
+    let mut account = Account::new(&[InitialBalance {
+        asset: usdt.clone(),
+        amount: decimal("60"),
+    }]);
+    account.reserve(&usdt, decimal("50")).unwrap(); // available 10, locked 50
+    let before = account.get_balance(&usdt).cloned().unwrap();
+
+    // Needs 100: release 50 -> available 60 < 100. Used to release first, then fail the debit.
+    let err = account
+        .apply_fill(
+            Side::Buy,
+            &usdt,
+            &btc,
+            decimal("100"),
+            Decimal::ONE,
+            Decimal::ZERO,
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        crate::error::ExchangeError::InsufficientBalance
+    ));
+    let after = account.get_balance(&usdt).unwrap();
+    assert_eq!(after.available, before.available);
+    assert_eq!(after.locked, before.locked);
+    assert_eq!(after.total, before.total);
+    assert!(account.get_balance(&btc).is_none());
+}
+
+#[test]
+fn account_linear_fill_is_atomic_when_realized_loss_cannot_be_paid() {
+    use crate::account::{Account, LinearFill};
+    let usdt = Asset("USDT".into());
+    let inst = InstrumentId::new("BTC-USDT");
+    let mut account = Account::new(&[InitialBalance {
+        asset: usdt.clone(),
+        amount: decimal("10"),
+    }]);
+    account.update_position(Position {
+        instrument_id: inst.clone(),
+        side: Side::Buy,
+        quantity: Decimal::ONE,
+        entry_price: decimal("100"),
+        unrealized_pnl: Some(Decimal::ZERO),
+    });
+    // Fee (1) is payable but the realized loss (50) is not: fee debit must be rolled back.
+    let err = account
+        .apply_linear_fill(LinearFill {
+            quote_asset: &usdt,
+            instrument_id: &inst,
+            side: Side::Sell,
+            price: decimal("50"),
+            quantity: Decimal::ONE,
+            fee: Decimal::ONE,
+            reducing: true,
+            leverage: 10,
+            mark: decimal("50"),
+        })
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        crate::error::ExchangeError::InsufficientBalance
+    ));
+    assert_eq!(account.get_balance(&usdt).unwrap().total, decimal("10"));
+    assert_eq!(account.get_position(&inst).unwrap().quantity, Decimal::ONE);
+}
+
+// ---------- Deterministic ordering / clock ----------
+
+fn run_deterministic_session() -> (Vec<String>, Vec<String>, Vec<String>) {
+    let (mut exchange, _, _) = PaperExchange::new(test_config());
+    exchange.set_deterministic_ids(true);
+    exchange.set_now_override(Some(
+        chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    ));
+    exchange
+        .inject_orderbook(book("49900", "50000", "1", 1))
+        .unwrap();
+    // Resting buys below the ask (prices are not in placement order on purpose).
+    for p in [
+        "40010", "40000", "40030", "40020", "40050", "40040", "40070", "40060",
+    ] {
+        exchange.place_order(buy_limit("0.001", p)).unwrap();
+    }
+    let open_ids: Vec<String> = exchange
+        .get_open_orders(None)
+        .iter()
+        .map(|o| o.order_id.to_string())
+        .collect();
+    let canceled: Vec<String> = exchange
+        .cancel_all_orders()
+        .iter()
+        .map(|o| o.order_id.to_string())
+        .collect();
+    let (balances, _) = exchange.get_snapshot_data();
+    let assets = balances.iter().map(|b| b.asset.0.clone()).collect();
+    (open_ids, canceled, assets)
+}
+
+#[test]
+fn open_orders_and_cancel_all_follow_placement_order() {
+    let (open_a, canceled_a, assets) = run_deterministic_session();
+    assert_eq!(open_a.len(), 8);
+    // Deterministic ids are the placement sequence, so placement order is directly checkable.
+    let expected: Vec<String> = (1..=8).map(|n| OrderId::from_seq(n).to_string()).collect();
+    assert_eq!(open_a, expected);
+    assert_eq!(canceled_a, expected);
+    // Balances iterate by asset key.
+    assert_eq!(assets, vec!["BTC".to_string(), "USDT".to_string()]);
+
+    // Whole run is reproducible.
+    let (open_b, canceled_b, _) = run_deterministic_session();
+    assert_eq!(open_a, open_b);
+    assert_eq!(canceled_a, canceled_b);
+}
+
+#[test]
+fn open_orders_exclude_filled_and_keep_placement_order() {
+    let (mut exchange, _, _) = PaperExchange::new(test_config());
+    exchange
+        .inject_orderbook(book("49900", "50000", "1", 1))
+        .unwrap();
+    let a = exchange.place_order(buy_limit("0.001", "40000")).unwrap();
+    let b = exchange.place_order(buy_limit("0.001", "41000")).unwrap();
+    let c = exchange.place_order(buy_limit("0.001", "42000")).unwrap();
+    exchange
+        .cancel_order(CancelRequest::ByOrderId(b.order_id))
+        .unwrap();
+    // Ask 41500 crosses `c` (limit 42000) but not `a` (40000); `b` is already canceled.
+    exchange
+        .inject_orderbook(book("49900", "41500", "1", 2))
+        .unwrap();
+    let open: Vec<OrderId> = exchange
+        .get_open_orders(None)
+        .iter()
+        .map(|o| o.order_id)
+        .collect();
+    assert_eq!(open, vec![a.order_id]);
+    let trades = exchange.get_trades(None, None);
+    assert_eq!(trades.len(), 1);
+    assert_eq!(trades[0].order_id, c.order_id);
+}
+
+#[test]
+fn clock_override_stamps_orders() {
+    let (mut exchange, _, _) = PaperExchange::new(test_config());
+    let t = chrono::DateTime::parse_from_rfc3339("2030-05-06T07:08:09Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    exchange.set_now_override(Some(t));
+    let order = exchange.place_order(buy_limit("0.001", "40000")).unwrap();
+    assert_eq!(order.created_at, t);
+    assert_eq!(order.updated_at, t);
+}
+
+// ---------- Trade history ----------
+
+#[test]
+fn trade_history_is_bounded_and_keeps_newest() {
+    let mut config = test_config();
+    config.max_trade_history = 2;
+    let (mut exchange, _, _) = PaperExchange::new(config);
+    exchange.set_deterministic_ids(true);
+    exchange
+        .inject_orderbook(book("49900", "50000", "10", 1))
+        .unwrap();
+    for _ in 0..3 {
+        let o = exchange.place_order(buy_limit("0.001", "50000")).unwrap();
+        assert_eq!(o.status, OrderStatus::Filled);
+    }
+    let trades = exchange.get_trades(None, None);
+    assert_eq!(trades.len(), 2);
+    assert_eq!(trades[0].order_id, OrderId::from_seq(2));
+    assert_eq!(trades[1].order_id, OrderId::from_seq(3));
+    let last = exchange.get_trades(None, Some(1));
+    assert_eq!(last.len(), 1);
+    assert_eq!(last[0].order_id, OrderId::from_seq(3));
+}

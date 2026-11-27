@@ -9,16 +9,17 @@ use crate::orderbook::Orderbook;
 use crate::types::*;
 use chrono::Utc;
 use rust_decimal::Decimal;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 pub struct PaperExchange {
-    config: Config,
+    config: Arc<Config>,
     orderbook: Orderbook,
     order_manager: OrderManager,
     account: Account,
     /// In-memory trade history derived from executions (fills only, no acks). Used by REST /trades.
-    trades: Vec<Execution>,
+    trades: VecDeque<Execution>,
     market_tx: mpsc::UnboundedSender<StreamEvent<MarketDataEvent>>,
     private_tx: mpsc::UnboundedSender<StreamEvent<PrivateEvent>>,
     market_sequence: u64,
@@ -39,31 +40,43 @@ pub struct PaperExchange {
     partial_next_qty: Option<Decimal>,
     /// One-shot lab fault: emit Position before Execution on the next fill.
     position_before_fill: bool,
+    /// Injectable clock: when set, `now()` returns this instant instead of `Utc::now()`.
+    now_override: Option<chrono::DateTime<Utc>>,
+    /// When set, trade ids are derived from `next_trade_seq` (order ids via the order manager).
+    deterministic_ids: bool,
+    next_trade_seq: u64,
 }
 
 impl PaperExchange {
+    /// Build an exchange. Accepts a `Config` or an already shared `Arc<Config>`.
+    ///
+    /// Iteration order is deterministic (open orders by placement sequence, balances and
+    /// positions by key). `OrderId`/`TradeId` stay random UUIDs and timestamps use the wall
+    /// clock unless [`set_deterministic_ids`](Self::set_deterministic_ids) /
+    /// [`set_now_override`](Self::set_now_override) are used.
     pub fn new(
-        config: Config,
+        config: impl Into<Arc<Config>>,
     ) -> (
         Self,
         mpsc::UnboundedReceiver<StreamEvent<MarketDataEvent>>,
         mpsc::UnboundedReceiver<StreamEvent<PrivateEvent>>,
     ) {
+        let config: Arc<Config> = config.into();
         let (market_tx, market_rx) = mpsc::unbounded_channel();
         let (private_tx, private_rx) = mpsc::unbounded_channel();
         // orderbook entries added below
         let account = Account::new(&config.initial_balances);
-        let order_manager = OrderManager::new(config.clone());
+        let order_manager = OrderManager::new(Arc::clone(&config));
         let mut orderbook = Orderbook::new();
         for inst in &config.instruments {
             orderbook.ensure_instrument(inst.id.clone());
         }
         let exchange = Self {
-            config: config.clone(),
+            config,
             orderbook,
             order_manager,
             account,
-            trades: Vec::new(),
+            trades: VecDeque::new(),
             market_tx,
             private_tx,
             market_sequence: 0,
@@ -76,12 +89,35 @@ impl PaperExchange {
             drop_next_place: false,
             partial_next_qty: None,
             position_before_fill: false,
+            now_override: None,
+            deterministic_ids: false,
+            next_trade_seq: 0,
         };
         (exchange, market_rx, private_rx)
     }
 
     fn now(&self) -> chrono::DateTime<Utc> {
-        Utc::now()
+        self.now_override.unwrap_or_else(Utc::now)
+    }
+
+    /// Pin (or with `None` release) the exchange clock. Order/execution/book timestamps use it.
+    pub fn set_now_override(&mut self, now: Option<chrono::DateTime<Utc>>) {
+        self.now_override = now;
+    }
+
+    /// Derive `OrderId`/`TradeId` from monotonically increasing sequences instead of random UUIDs.
+    pub fn set_deterministic_ids(&mut self, on: bool) {
+        self.deterministic_ids = on;
+        self.order_manager.set_deterministic_ids(on);
+    }
+
+    fn next_trade_id(&mut self) -> TradeId {
+        if self.deterministic_ids {
+            self.next_trade_seq += 1;
+            TradeId::from_seq(self.next_trade_seq)
+        } else {
+            TradeId::new()
+        }
     }
 
     fn send_market(&mut self, event: MarketDataEvent) {
@@ -105,7 +141,7 @@ impl PaperExchange {
         mut snapshot: OrderbookSnapshot,
     ) -> Result<(), ExchangeError> {
         if let Some(age) = self.stale_book_age_secs {
-            snapshot.timestamp = Utc::now() - chrono::Duration::seconds(age.max(0));
+            snapshot.timestamp = self.now() - chrono::Duration::seconds(age.max(0));
         }
         let aged = snapshot.timestamp;
         let mut out = self.orderbook.apply_snapshot(snapshot);
@@ -123,28 +159,68 @@ impl PaperExchange {
         Ok(())
     }
 
+    /// Match every open order, oldest placement first, against the current book.
+    ///
+    /// A fill that cannot be settled (`InsufficientBalance`, e.g. a market buy priced above the
+    /// available quote) leaves the account and the order's fill state untouched and rejects the
+    /// order, so one unfunded order neither corrupts state nor blocks the rest of the queue.
     fn run_matching(&mut self) -> Result<(), ExchangeError> {
-        let open: Vec<Order> = self
-            .order_manager
-            .open_orders()
-            .into_iter()
-            .cloned()
-            .collect();
-        for order in open {
-            let book = self.orderbook.get(&order.instrument_id);
-            if let Some(mut fill) = try_fill(&order, book, &self.config.fill_model) {
-                if let Some(cap) = self.partial_next_qty.take() {
-                    if cap > Decimal::ZERO && cap < fill.quantity {
-                        fill.quantity = cap;
-                    }
+        for order_id in self.order_manager.open_order_ids() {
+            let Some(order) = self.order_manager.get_order(order_id) else {
+                continue;
+            };
+            let Some(mut fill) = try_fill(
+                order,
+                self.orderbook.get(&order.instrument_id),
+                &self.config.fill_model,
+            ) else {
+                continue;
+            };
+            if let Some(cap) = self.partial_next_qty.take() {
+                if cap > Decimal::ZERO && cap < fill.quantity {
+                    fill.quantity = cap;
                 }
-                self.apply_fill(&order, &fill)?;
+            }
+            let order = order.clone();
+            match self.apply_fill(&order, &fill) {
+                Ok(()) => {}
+                Err(ExchangeError::InsufficientBalance) => self.reject_unfunded(&order)?,
+                Err(e) => return Err(e),
             }
         }
         Ok(())
     }
 
+    /// Reject an open order whose fill could not be funded; emits a rejecting execution + balances.
+    fn reject_unfunded(&mut self, order: &Order) -> Result<(), ExchangeError> {
+        let now = self.now();
+        let rejected = self
+            .order_manager
+            .reject_order(order.order_id, &mut self.account, now)?;
+        self.send_private(PrivateEvent::Execution(Execution {
+            order_id: rejected.order_id,
+            trade_id: TradeId::nil(),
+            instrument_id: rejected.instrument_id.clone(),
+            side: rejected.side,
+            price: rejected.price,
+            quantity: Decimal::ZERO,
+            fee: None,
+            timestamp: now,
+            reject_reason: Some("insufficient balance to settle fill".into()),
+            client_order_id: rejected.client_order_id.clone(),
+        }));
+        for bal in self.account.get_all_balances() {
+            self.send_private(PrivateEvent::Balance(bal));
+        }
+        Ok(())
+    }
+
+    /// Settle a fill: account first (atomic), then order state, so an order is never marked
+    /// filled when its account debit fails.
     fn apply_fill(&mut self, order: &Order, fill: &Fill) -> Result<(), ExchangeError> {
+        if self.order_manager.get_order(order.order_id).is_none() {
+            return Err(ExchangeError::OrderNotFound);
+        }
         let instrument = self
             .config
             .instruments
@@ -152,18 +228,8 @@ impl PaperExchange {
             .find(|i| i.id.0 == order.instrument_id.0)
             .ok_or_else(|| ExchangeError::InvalidInstrument(order.instrument_id.0.clone()))?;
 
-        let trade_id = TradeId::new();
         let now = self.now();
-
-        let o = self.order_manager.get_order_mut(&order.order_id).unwrap();
-        o.filled_qty += fill.quantity;
-        o.updated_at = now;
-        o.status = if o.filled_qty >= o.quantity {
-            OrderStatus::Filled
-        } else {
-            OrderStatus::PartiallyFilled
-        };
-        let reducing = o.reduce_only;
+        let reducing = order.reduce_only;
 
         let linear = crate::linear::instrument_is_linear(instrument);
         let fee = if linear {
@@ -181,7 +247,7 @@ impl PaperExchange {
             self.account.apply_linear_fill(crate::account::LinearFill {
                 quote_asset: &instrument.quote_asset,
                 instrument_id: &order.instrument_id,
-                side: order.side.clone(),
+                side: order.side,
                 price: fill.price,
                 quantity: fill.quantity,
                 fee,
@@ -191,7 +257,7 @@ impl PaperExchange {
             })?;
         } else {
             self.account.apply_fill(
-                order.side.clone(),
+                order.side,
                 &instrument.quote_asset,
                 &instrument.base_asset,
                 fill.price,
@@ -200,11 +266,16 @@ impl PaperExchange {
             )?;
         }
 
+        // Account is settled; the order must exist (checked above), so this cannot fail.
+        self.order_manager
+            .record_fill(order.order_id, fill.quantity, now)?;
+        let trade_id = self.next_trade_id();
+
         let exec = Execution {
             order_id: order.order_id,
             trade_id,
             instrument_id: order.instrument_id.clone(),
-            side: order.side.clone(),
+            side: order.side,
             price: fill.price,
             quantity: fill.quantity,
             fee: Some(fee),
@@ -213,11 +284,12 @@ impl PaperExchange {
             client_order_id: order.client_order_id.clone(),
         };
         // Persist fill in in-memory trade history for REST /trades (bounded).
-        self.trades.push(exec.clone());
+        self.trades.push_back(exec.clone());
         let cap = self.config.max_trade_history;
-        if cap > 0 && self.trades.len() > cap {
-            let drop = self.trades.len() - cap;
-            self.trades.drain(0..drop);
+        if cap > 0 {
+            while self.trades.len() > cap {
+                self.trades.pop_front();
+            }
         }
         let duplicate = if self.duplicate_next_fill {
             self.duplicate_next_fill = false;
@@ -236,7 +308,7 @@ impl PaperExchange {
             instrument_id: order.instrument_id.clone(),
             price: fill.price,
             quantity: fill.quantity,
-            side: order.side.clone(),
+            side: order.side,
             timestamp: now,
             trade_id,
         };
@@ -246,7 +318,7 @@ impl PaperExchange {
             // Account drops flat rows; still emit qty=0 so the runner can clear TSM.
             positions.push(Position {
                 instrument_id: order.instrument_id.clone(),
-                side: order.side.clone(),
+                side: order.side,
                 quantity: Decimal::ZERO,
                 entry_price: Decimal::ZERO,
                 unrealized_pnl: Some(Decimal::ZERO),
@@ -334,9 +406,9 @@ impl PaperExchange {
     }
 
     /// Return all open orders (New/PartiallyFilled), optionally filtered by instrument_id.
+    /// Ordered by placement sequence (oldest first); only open orders are scanned.
     pub fn get_open_orders(&self, instrument_id: Option<&InstrumentId>) -> Vec<Order> {
-        let mut out: Vec<Order> = self
-            .order_manager
+        self.order_manager
             .open_orders()
             .into_iter()
             .filter(|o| {
@@ -345,10 +417,7 @@ impl PaperExchange {
                     .unwrap_or(true)
             })
             .cloned()
-            .collect();
-        // Sort by created_at ascending for deterministic output.
-        out.sort_by_key(|o| o.created_at);
-        out
+            .collect()
     }
 
     /// Look up an order by client id, including filled/canceled/rejected.
@@ -435,7 +504,7 @@ impl PaperExchange {
             order_id: order.order_id,
             trade_id: TradeId::nil(),
             instrument_id: order.instrument_id.clone(),
-            side: order.side.clone(),
+            side: order.side,
             price: order.price,
             quantity: Decimal::ZERO,
             fee: None,
@@ -474,7 +543,7 @@ impl PaperExchange {
     }
 
     /// Fill `qty` of a named open order, or the oldest open order if `order_id` is omitted.
-    /// HashMap iteration is not a stable owner, so two-level labs must name the target.
+    /// "Oldest" is placement order; two-level labs should still name the target explicitly.
     pub fn lab_fill_open(
         &mut self,
         qty: Decimal,
@@ -492,7 +561,7 @@ impl PaperExchange {
             self.order_manager
                 .open_orders()
                 .into_iter()
-                .min_by_key(|o| o.created_at)
+                .next()
                 .cloned()
                 .ok_or_else(|| ExchangeError::Validation("no open order to fill".into()))?
         };
@@ -542,28 +611,23 @@ impl PaperExchange {
         instrument_id: Option<&InstrumentId>,
         limit: Option<usize>,
     ) -> Vec<Execution> {
-        let mut trades: Vec<Execution> = self
-            .trades
-            .iter()
-            .filter(|e| {
-                instrument_id
-                    .map(|iid| &e.instrument_id == iid)
-                    .unwrap_or(true)
-            })
-            .cloned()
-            .collect();
-        // Trades are stored in insertion order; keep as-is and apply limit from the end.
-        if let Some(n) = limit {
-            if trades.len() > n {
-                trades = trades.split_off(trades.len() - n);
-            }
-        }
+        let matching = self.trades.iter().filter(|e| {
+            instrument_id
+                .map(|iid| &e.instrument_id == iid)
+                .unwrap_or(true)
+        });
+        // Trades are stored in insertion order; apply the limit from the end, keep order.
+        let mut trades: Vec<Execution> = match limit {
+            Some(n) => matching.rev().take(n).cloned().collect(),
+            None => return matching.cloned().collect(),
+        };
+        trades.reverse();
         trades
     }
 
-    /// Return a copy of the static config (used to derive /exchange_info).
-    pub fn get_config(&self) -> Config {
-        self.config.clone()
+    /// Return the shared static config (used to derive /exchange_info).
+    pub fn get_config(&self) -> Arc<Config> {
+        Arc::clone(&self.config)
     }
 
     pub fn cancel_order(&mut self, req: CancelRequest) -> Result<Order, ExchangeError> {

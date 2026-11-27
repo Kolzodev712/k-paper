@@ -70,11 +70,14 @@ pub fn spawn_overlay_timeline(timeline: ScenarioTimeline, runtime: Arc<Mutex<Mar
     });
 }
 
+/// Replay a static scenario file. Every event (orderbook, trade, place_order) is sent on the one
+/// `command_tx` channel in file order, so the core executes "inject book" before a following
+/// "place order" deterministically. Pass the core's **user** command channel (the one the core
+/// treats as ordered/high priority), not the market-engine channel.
 pub fn spawn_static_scenario(
     path: impl AsRef<Path>,
     interval_ms: u64,
-    user_command_tx: mpsc::UnboundedSender<Command>,
-    dummy_command_tx: mpsc::UnboundedSender<Command>,
+    command_tx: mpsc::UnboundedSender<Command>,
 ) {
     let path = path.as_ref().to_path_buf();
     tokio::spawn(async move {
@@ -102,7 +105,7 @@ pub fn spawn_static_scenario(
             if i > 0 && interval_ms > 0 {
                 tokio::time::sleep(tokio::time::Duration::from_millis(interval_ms)).await;
             }
-            if let Err(e) = dispatch_static_event(ev, &user_command_tx, &dummy_command_tx) {
+            if let Err(e) = dispatch_static_event(ev, &command_tx) {
                 tracing::warn!("scenario event {}: {}", i, e);
             }
         }
@@ -140,8 +143,7 @@ struct StaticScenario {
 
 fn dispatch_static_event(
     ev: StaticScenarioEvent,
-    user_command_tx: &mpsc::UnboundedSender<Command>,
-    dummy_command_tx: &mpsc::UnboundedSender<Command>,
+    command_tx: &mpsc::UnboundedSender<Command>,
 ) -> Result<(), String> {
     match ev.t.as_str() {
         "orderbook" => {
@@ -157,7 +159,7 @@ fn dispatch_static_event(
                 sequence: 0,
                 timestamp: chrono::Utc::now(),
             };
-            dummy_command_tx
+            command_tx
                 .send(Command::InjectOrderbook(snapshot))
                 .map_err(|_| "core shut down".to_string())?;
         }
@@ -179,7 +181,7 @@ fn dispatch_static_event(
                 timestamp: chrono::Utc::now(),
                 trade_id: TradeId::new(),
             };
-            dummy_command_tx
+            command_tx
                 .send(Command::InjectTrade(trade))
                 .map_err(|_| "core shut down".to_string())?;
         }
@@ -202,7 +204,7 @@ fn dispatch_static_event(
                 client_order_id: ev.client_order_id.map(ClientOrderId),
                 reduce_only: false,
             };
-            user_command_tx
+            command_tx
                 .send(Command::PlaceOrder(req, None))
                 .map_err(|_| "core shut down".to_string())?;
         }
@@ -232,5 +234,39 @@ fn parse_side(s: Option<&str>) -> Side {
     match s {
         Some("Sell") | Some("sell") => Side::Sell,
         _ => Side::Buy,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event(json: &str) -> StaticScenarioEvent {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn static_events_share_one_channel_in_file_order() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        dispatch_static_event(
+            event(r#"{"t":"orderbook","bids":[["49900","1"]],"asks":[["50000","1"]]}"#),
+            &tx,
+        )
+        .unwrap();
+        dispatch_static_event(
+            event(r#"{"t":"place_order","side":"Buy","limit_price":"50000","quantity":"0.1"}"#),
+            &tx,
+        )
+        .unwrap();
+        dispatch_static_event(
+            event(r#"{"t":"trade","price":"50000","quantity":"0.1"}"#),
+            &tx,
+        )
+        .unwrap();
+
+        assert!(matches!(rx.try_recv(), Ok(Command::InjectOrderbook(_))));
+        assert!(matches!(rx.try_recv(), Ok(Command::PlaceOrder(_, None))));
+        assert!(matches!(rx.try_recv(), Ok(Command::InjectTrade(_))));
+        assert!(rx.try_recv().is_err());
     }
 }

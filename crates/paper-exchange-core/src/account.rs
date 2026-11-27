@@ -4,12 +4,12 @@ use crate::error::ExchangeError;
 use crate::linear::{initial_margin, signed_fill_qty};
 use crate::types::{Asset, Balance, InstrumentId, Position, Side};
 use rust_decimal::Decimal;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Default)]
 pub struct Account {
-    balances: HashMap<Asset, Balance>,
-    positions: HashMap<InstrumentId, Position>,
+    balances: BTreeMap<Asset, Balance>,
+    positions: BTreeMap<InstrumentId, Position>,
 }
 
 /// Parameters for a USDT-linear fill. Quantity is signed onto the position.
@@ -27,7 +27,7 @@ pub struct LinearFill<'a> {
 
 impl Account {
     pub fn new(initial_balances: &[crate::config::InitialBalance]) -> Self {
-        let mut balances = HashMap::new();
+        let mut balances = BTreeMap::new();
         for ib in initial_balances {
             balances.insert(
                 ib.asset.clone(),
@@ -41,7 +41,7 @@ impl Account {
         }
         Self {
             balances,
-            positions: HashMap::new(),
+            positions: BTreeMap::new(),
         }
     }
 
@@ -125,7 +125,20 @@ impl Account {
         }
     }
 
+    /// True if `amount` can be settled out of `asset`: release up to `locked`, then debit from available.
+    fn can_settle(&self, asset: &Asset, amount: Decimal) -> bool {
+        let (available, locked) = self
+            .balances
+            .get(asset)
+            .map(|b| (b.available, b.locked))
+            .unwrap_or((Decimal::ZERO, Decimal::ZERO));
+        available + amount.min(locked) >= amount
+    }
+
     /// Apply a fill: consume the reserved side and credit the other. Fee reduces quote credit.
+    ///
+    /// Atomic: the debit is validated before any balance is touched, so on
+    /// `InsufficientBalance` the account is unchanged.
     pub fn apply_fill(
         &mut self,
         side: Side,
@@ -138,6 +151,9 @@ impl Account {
         match side {
             Side::Buy => {
                 let quote_amount = price * quantity + fee;
+                if !self.can_settle(quote_asset, quote_amount) {
+                    return Err(ExchangeError::InsufficientBalance);
+                }
                 self.release(quote_asset, quote_amount);
                 self.debit(quote_asset, quote_amount)?;
                 self.credit(base_asset, quantity);
@@ -145,6 +161,9 @@ impl Account {
             Side::Sell => {
                 let base_amount = quantity;
                 let quote_amount = (price * quantity - fee).max(Decimal::ZERO);
+                if !self.can_settle(base_asset, base_amount) {
+                    return Err(ExchangeError::InsufficientBalance);
+                }
                 self.release(base_asset, base_amount);
                 self.debit(base_asset, base_amount)?;
                 self.credit(quote_asset, quote_amount);
@@ -154,7 +173,17 @@ impl Account {
     }
 
     /// USDT-linear fill: IM stays in USDT; no base/quote swap. Quantity is signed on the position.
+    ///
+    /// Atomic: steps run against a scratch copy that replaces `self` only on success, so a
+    /// failed debit (fee or realized loss) leaves balances and positions untouched.
     pub fn apply_linear_fill(&mut self, fill: LinearFill<'_>) -> Result<(), ExchangeError> {
+        let mut next = self.clone();
+        next.apply_linear_fill_steps(fill)?;
+        *self = next;
+        Ok(())
+    }
+
+    fn apply_linear_fill_steps(&mut self, fill: LinearFill<'_>) -> Result<(), ExchangeError> {
         if fill.fee > Decimal::ZERO {
             self.debit(fill.quote_asset, fill.fee)?;
         }

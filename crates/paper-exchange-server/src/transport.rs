@@ -37,7 +37,7 @@ pub enum RestQuery {
         limit: Option<usize>,
         reply: oneshot::Sender<Vec<Execution>>,
     },
-    MarketInfo(oneshot::Sender<Config>),
+    MarketInfo(oneshot::Sender<Arc<Config>>),
     OrderByClientId {
         client_order_id: String,
         reply: oneshot::Sender<Option<Order>>,
@@ -147,8 +147,20 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, trading: boo
                     let ev = match result {
                         Ok(ev) => ev,
                         Err(broadcast::error::RecvError::Lagged(n)) => {
-                            tracing::warn!("broadcast lagged, skipped {} messages", n);
-                            continue;
+                            // Policy: never continue silently past a gap. Tell the client how
+                            // much it missed, then close so it reconnects and resyncs from a
+                            // fresh account snapshot (the stream cannot be resumed).
+                            tracing::warn!(
+                                "broadcast lagged, skipped {} messages; closing connection",
+                                n
+                            );
+                            if let Ok(serialized) =
+                                serde_json::to_string(&ServerMessage::Lagged { skipped: n })
+                            {
+                                let _ = sender.send(Message::Text(serialized)).await;
+                            }
+                            let _ = sender.send(Message::Close(None)).await;
+                            break;
                         }
                         Err(broadcast::error::RecvError::Closed) => break,
                     };
@@ -226,8 +238,13 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, trading: boo
                                 );
                                 let msgs: Vec<ServerMessage> = balances
                                     .into_iter()
-                                    .map(ServerMessage::Balance)
-                                    .chain(positions.into_iter().map(ServerMessage::Position))
+                                    .map(|balance| ServerMessage::Balance { balance, seq: None })
+                                    .chain(positions.into_iter().map(|position| {
+                                        ServerMessage::Position {
+                                            position,
+                                            seq: None,
+                                        }
+                                    }))
                                     .collect();
                                 let _ = direct_tx.send(msgs).await;
                             }
@@ -255,8 +272,12 @@ pub async fn handle_socket(socket: WebSocket, state: Arc<AppState>, trading: boo
                                         "trading: sending execution report order_id={} instrument_id={}",
                                         exec.order_id, exec.instrument_id
                                     );
-                                    let _ =
-                                        direct_tx.send(vec![ServerMessage::Execution(exec)]).await;
+                                    let _ = direct_tx
+                                        .send(vec![ServerMessage::Execution {
+                                            execution: exec,
+                                            seq: None,
+                                        }])
+                                        .await;
                                 }
                                 Ok(Err(msg)) => {
                                     info!("trading: sending place_order error: {}", msg);

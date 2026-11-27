@@ -122,11 +122,45 @@ pub enum ClientMessage {
 pub enum ServerMessage {
     /// Sent once on connect so the client can verify the connection and server version.
     Connected {},
-    Orderbook(OrderbookSnapshot),
-    PublicTrade(PublicTrade),
-    Execution(Execution),
-    Balance(Balance),
-    Position(Position),
+    /// Market/private stream events carry the core stream `seq` (per stream: market and private
+    /// are numbered independently, starting at 1). A gap means events were missed. Direct replies
+    /// (account snapshot, place reply) are not stream events and omit `seq`.
+    Orderbook {
+        #[serde(flatten)]
+        snapshot: OrderbookSnapshot,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
+    },
+    PublicTrade {
+        #[serde(flatten)]
+        trade: PublicTrade,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
+    },
+    Execution {
+        #[serde(flatten)]
+        execution: Execution,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
+    },
+    Balance {
+        #[serde(flatten)]
+        balance: Balance,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
+    },
+    Position {
+        #[serde(flatten)]
+        position: Position,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
+    },
+    /// This connection fell behind the broadcast and `skipped` events were dropped. Sent once,
+    /// immediately before the server closes the socket: reconnect to get a fresh account
+    /// snapshot and resync (the stream cannot be resumed).
+    Lagged {
+        skipped: u64,
+    },
     #[serde(rename = "CancelAck")]
     CancelAck {
         order_id: String,
@@ -159,12 +193,13 @@ impl From<paper_exchange_core::types::StreamEvent<paper_exchange_core::types::Ma
     fn from(
         ev: paper_exchange_core::types::StreamEvent<paper_exchange_core::types::MarketDataEvent>,
     ) -> Self {
+        let seq = Some(ev.sequence);
         match ev.payload {
-            paper_exchange_core::types::MarketDataEvent::Orderbook(s) => {
-                ServerMessage::Orderbook(s)
+            paper_exchange_core::types::MarketDataEvent::Orderbook(snapshot) => {
+                ServerMessage::Orderbook { snapshot, seq }
             }
-            paper_exchange_core::types::MarketDataEvent::PublicTrade(t) => {
-                ServerMessage::PublicTrade(t)
+            paper_exchange_core::types::MarketDataEvent::PublicTrade(trade) => {
+                ServerMessage::PublicTrade { trade, seq }
             }
         }
     }
@@ -176,10 +211,17 @@ impl From<paper_exchange_core::types::StreamEvent<paper_exchange_core::types::Pr
     fn from(
         ev: paper_exchange_core::types::StreamEvent<paper_exchange_core::types::PrivateEvent>,
     ) -> Self {
+        let seq = Some(ev.sequence);
         match ev.payload {
-            paper_exchange_core::types::PrivateEvent::Execution(e) => ServerMessage::Execution(e),
-            paper_exchange_core::types::PrivateEvent::Balance(b) => ServerMessage::Balance(b),
-            paper_exchange_core::types::PrivateEvent::Position(p) => ServerMessage::Position(p),
+            paper_exchange_core::types::PrivateEvent::Execution(execution) => {
+                ServerMessage::Execution { execution, seq }
+            }
+            paper_exchange_core::types::PrivateEvent::Balance(balance) => {
+                ServerMessage::Balance { balance, seq }
+            }
+            paper_exchange_core::types::PrivateEvent::Position(position) => {
+                ServerMessage::Position { position, seq }
+            }
         }
     }
 }
@@ -204,9 +246,53 @@ mod tests {
             reject_reason: None,
             client_order_id: Some(ClientOrderId("cid-1".into())),
         };
-        let json = serde_json::to_string(&ServerMessage::Execution(exec)).unwrap();
+        let json = serde_json::to_string(&ServerMessage::Execution {
+            execution: exec,
+            seq: None,
+        })
+        .unwrap();
         assert!(json.contains("cid-1"), "{json}");
         assert!(json.contains("client_order_id"), "{json}");
-        println!("{json}");
+        assert!(
+            !json.contains("\"seq\""),
+            "direct replies carry no seq: {json}"
+        );
+    }
+
+    #[test]
+    fn stream_events_carry_seq_on_the_wire() {
+        use paper_exchange_core::types::StreamEvent;
+        let ev = StreamEvent {
+            sequence: 42,
+            payload: PrivateEvent::Balance(Balance {
+                asset: Asset("USDT".into()),
+                available: Decimal::ONE,
+                locked: Decimal::ZERO,
+                total: Decimal::ONE,
+            }),
+        };
+        let json = serde_json::to_string(&ServerMessage::from(ev)).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["type"], "balance");
+        assert_eq!(v["seq"], 42);
+        assert_eq!(v["asset"], "USDT");
+        let back: ServerMessage = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, ServerMessage::Balance { seq: Some(42), .. }));
+    }
+
+    #[test]
+    fn lagged_message_serializes_skipped_count() {
+        let json = serde_json::to_string(&ServerMessage::Lagged { skipped: 7 }).unwrap();
+        assert_eq!(json, r#"{"type":"lagged","skipped":7}"#);
+    }
+
+    #[test]
+    fn config_json_defaults_max_trade_history() {
+        use paper_exchange_core::config::Config;
+        let cfg: Config = serde_json::from_str(
+            r#"{"instruments":[],"initial_balances":[],"fill_model":{"kind":"immediate_cross","slippage_bps":0,"fee_bps":0,"partial_fills":false}}"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.max_trade_history, 10_000);
     }
 }

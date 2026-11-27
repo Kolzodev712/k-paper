@@ -11,6 +11,16 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc as tokio_mpsc;
 
 /// Async core loop: one select! for commands and for exchange outputs (market + private).
+///
+/// Channel roles and priority:
+/// - `user_command_rx`: ordered FIFO for user/WS commands **and** scenario-driven events
+///   (`InjectOrderbook`/`InjectTrade`/`PlaceOrder` from a static scenario share this one channel,
+///   so a scenario's "book, then place" order is exactly the order the core executes them).
+/// - `dummy_command_rx`: baseline market-engine traffic only (book + trade noise).
+///
+/// The wait is `biased`: user commands, then snapshots, REST queries, market-engine commands,
+/// then exchange outputs. User/scenario traffic is therefore never starved or reordered by
+/// market-engine noise; the cost is that a flood of user commands delays dummy traffic.
 pub async fn run_core_loop(
     config: Config,
     mut user_command_rx: tokio_mpsc::UnboundedReceiver<Command>,
@@ -56,6 +66,7 @@ pub async fn run_core_loop(
 
         // Then wait for one of: more commands, dummy, or exchange outputs.
         tokio::select! {
+            biased;
             Some(cmd) = user_command_rx.recv() => {
                 run_user_command(&mut exchange, &event_tx, &mut private_rx, cmd);
             }
@@ -101,24 +112,32 @@ fn run_user_command(
     cmd: Command,
 ) {
     match cmd {
-        Command::PlaceOrder(req, mut reply_tx) => {
+        Command::PlaceOrder(req, reply_tx) => {
             if exchange.take_drop_next_place() {
                 tracing::warn!("lab drop_next_place: swallowing place without book or reply");
-                let _ = reply_tx.take();
+                drop(reply_tx);
                 return;
             }
             match exchange.place_order(req) {
                 Err(e) => {
                     tracing::warn!("place_order error: {:?}", e);
-                    if let Some(tx) = reply_tx.take() {
+                    if let Some(tx) = reply_tx {
                         let _ = tx.send(Err(e.to_string()));
                     }
                 }
-                Ok(_) => {
+                Ok(placed) => {
+                    // Only the first Execution for *this* order answers the caller; the sender is
+                    // consumed on that match, never on unrelated events. If the ACK is suppressed
+                    // (lab fault) and nothing fills, the reply sender is dropped with no reply.
+                    let mut reply_tx = reply_tx;
                     while let Ok(ev) = private_rx.try_recv() {
-                        if let Some(tx) = reply_tx.take() {
-                            if let PrivateEvent::Execution(exec) = ev.payload.clone() {
-                                let _ = tx.send(Ok(exec));
+                        if reply_tx.is_some() {
+                            if let PrivateEvent::Execution(exec) = &ev.payload {
+                                if exec.order_id == placed.order_id {
+                                    if let Some(tx) = reply_tx.take() {
+                                        let _ = tx.send(Ok(exec.clone()));
+                                    }
+                                }
                             }
                         }
                         let _ = event_tx.send(BroadcastEvent::Private(ev));
@@ -162,8 +181,9 @@ fn run_user_command(
                 }
             }
         },
-        Command::InjectOrderbook(_) | Command::InjectTrade(_) => {
-            unreachable!("dummy commands go to run_dummy_command")
+        // Scenario events share the user channel (see `run_core_loop`); inject inline, in order.
+        cmd @ (Command::InjectOrderbook(_) | Command::InjectTrade(_)) => {
+            run_dummy_command(exchange, cmd)
         }
     }
 }
@@ -184,7 +204,7 @@ fn run_dummy_command(exchange: &mut PaperExchange, cmd: Command) {
         | Command::CancelAll(_)
         | Command::Cancel(_, _)
         | Command::Amend(_, _) => {
-            unreachable!("user commands go to run_user_command")
+            unreachable!("order commands go to run_user_command")
         }
     }
 }
@@ -318,4 +338,68 @@ pub fn spawn_core_task(
         .await
     });
     event_tx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use paper_exchange_core::config::{FillModelConfig, InitialBalance};
+    use rust_decimal::Decimal;
+    use tokio::sync::oneshot;
+
+    fn config() -> Config {
+        Config {
+            instruments: vec![Instrument {
+                id: InstrumentId::new("BTC-USDT"),
+                symbol: "BTC-USDT".into(),
+                base_asset: Asset("BTC".into()),
+                quote_asset: Asset("USDT".into()),
+                tick_size: Decimal::new(1, 2),
+                lot_size: Decimal::new(1, 3),
+                min_notional: Decimal::TEN,
+                instrument_type: None,
+            }],
+            initial_balances: vec![InitialBalance {
+                asset: Asset("USDT".into()),
+                amount: Decimal::new(100_000, 0),
+            }],
+            fill_model: FillModelConfig::default(),
+            max_trade_history: 100,
+            linear: None,
+        }
+    }
+
+    /// Unrelated private events queued ahead of the place ACK must not consume the reply.
+    #[test]
+    fn place_reply_survives_unrelated_leading_private_events() {
+        let (mut exchange, _market_rx, mut private_rx) = PaperExchange::new(config());
+        exchange.emit_account_snapshot(); // Balance events now precede the ACK in `private_rx`.
+        let (event_tx, _event_rx) = broadcast::channel(64);
+        let (reply_tx, mut reply_rx) = oneshot::channel();
+
+        run_user_command(
+            &mut exchange,
+            &event_tx,
+            &mut private_rx,
+            Command::PlaceOrder(
+                OrderRequest {
+                    instrument_id: InstrumentId::new("BTC-USDT"),
+                    side: Side::Buy,
+                    order_type: OrderType::Limit,
+                    quantity: Decimal::new(1, 3),
+                    limit_price: Some(Decimal::new(40_000, 0)),
+                    client_order_id: None,
+                    reduce_only: false,
+                },
+                Some(reply_tx),
+            ),
+        );
+
+        let exec = reply_rx
+            .try_recv()
+            .expect("reply must not be dropped")
+            .expect("place ok");
+        assert_eq!(exec.quantity, Decimal::ZERO, "reply is the place ACK");
+        assert!(exec.client_order_id.is_none());
+    }
 }

@@ -215,15 +215,15 @@ pub async fn get_exchange_info(
     if state.rest_query_tx.send(RestQuery::MarketInfo(tx)).is_err() {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    let cfg: Config = rx.await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let cfg: Arc<Config> = rx.await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let now = Utc::now().timestamp_millis();
     let symbols: Vec<SymbolDto> = cfg
         .instruments
-        .into_iter()
+        .iter()
         .map(|inst| SymbolDto {
             symbol: inst.symbol.clone(),
-            base_asset: inst.base_asset.0,
-            quote_asset: inst.quote_asset.0,
+            base_asset: inst.base_asset.0.clone(),
+            quote_asset: inst.quote_asset.0.clone(),
             status: "TRADING".to_string(),
             trading_allowed: true,
             min_order_size: Some(inst.lot_size),

@@ -83,11 +83,11 @@ pub fn run() {
                     scenario::spawn_overlay_timeline(timeline, market_runtime);
                 }
                 Some(ScenarioLoad::Static(path)) => {
+                    // One ordered channel for the whole scenario (book/trade/place in file order).
                     scenario::spawn_static_scenario(
                         path,
                         scenario_interval_ms,
                         user_command_tx.clone(),
-                        dummy_command_tx,
                     );
                 }
                 None => {}

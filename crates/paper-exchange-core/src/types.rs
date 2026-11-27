@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 // ---------- IDs ----------
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct InstrumentId(pub String);
 
@@ -37,6 +37,11 @@ impl OrderId {
     pub fn new() -> Self {
         Self(Uuid::new_v4())
     }
+
+    /// Deterministic id derived from a monotonically increasing sequence (replay / tests).
+    pub fn from_seq(seq: u64) -> Self {
+        Self(Uuid::from_u128(u128::from(seq)))
+    }
 }
 
 impl fmt::Display for OrderId {
@@ -61,6 +66,11 @@ impl TradeId {
 
     pub fn nil() -> Self {
         Self(Uuid::nil())
+    }
+
+    /// Deterministic id derived from a monotonically increasing sequence (replay / tests).
+    pub fn from_seq(seq: u64) -> Self {
+        Self(Uuid::from_u128(u128::from(seq)))
     }
 }
 
@@ -102,7 +112,7 @@ pub mod uuid_str {
 
 // ---------- Asset ----------
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Asset(pub String);
 
 impl fmt::Display for Asset {
@@ -151,13 +161,13 @@ pub struct OrderbookSnapshot {
 
 // ---------- Order input ----------
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Side {
     Buy,
     Sell,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OrderType {
     Limit,
     Market,
@@ -191,7 +201,7 @@ pub struct AmendRequest {
 
 // ---------- Order state ----------
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OrderStatus {
     New,
     PartiallyFilled,
