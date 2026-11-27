@@ -83,7 +83,8 @@ fn orderbook_apply_snapshot() {
 #[test]
 fn place_and_fill_limit_order() {
     let config = test_config();
-    let (mut exchange, _market_rx, mut private_rx) = PaperExchange::new(config);
+    let (mut exchange, _market_rx, mut private_rx) =
+        PaperExchange::new(config).expect("valid config");
 
     exchange
         .inject_orderbook(OrderbookSnapshot {
@@ -147,7 +148,7 @@ fn place_and_fill_limit_order() {
 #[test]
 fn validation_rejects_unknown_instrument() {
     let config = test_config();
-    let (mut exchange, _, _) = PaperExchange::new(config);
+    let (mut exchange, _, _) = PaperExchange::new(config).expect("valid config");
 
     let err = exchange
         .place_order(OrderRequest {
@@ -170,7 +171,7 @@ fn validation_rejects_unknown_instrument() {
 #[test]
 fn duplicate_client_order_id_rejected() {
     let config = test_config();
-    let (mut exchange, _, _) = PaperExchange::new(config);
+    let (mut exchange, _, _) = PaperExchange::new(config).expect("valid config");
 
     exchange
         .inject_orderbook(OrderbookSnapshot {
@@ -216,7 +217,7 @@ fn duplicate_client_order_id_rejected() {
 #[test]
 fn client_order_id_lookup_includes_canceled() {
     let config = test_config();
-    let (mut exchange, _, _) = PaperExchange::new(config);
+    let (mut exchange, _, _) = PaperExchange::new(config).expect("valid config");
     exchange
         .inject_orderbook(OrderbookSnapshot {
             instrument_id: InstrumentId::new("BTC-USDT"),
@@ -258,7 +259,7 @@ fn client_order_id_lookup_includes_canceled() {
 #[test]
 fn suppress_place_ack_keeps_working_order() {
     let config = test_config();
-    let (mut exchange, _, mut private_rx) = PaperExchange::new(config);
+    let (mut exchange, _, mut private_rx) = PaperExchange::new(config).expect("valid config");
     exchange
         .inject_orderbook(OrderbookSnapshot {
             instrument_id: InstrumentId::new("BTC-USDT"),
@@ -303,7 +304,7 @@ fn suppress_place_ack_keeps_working_order() {
 #[test]
 fn suppress_next_place_ack_any_without_client_id() {
     let config = test_config();
-    let (mut exchange, _, mut private_rx) = PaperExchange::new(config);
+    let (mut exchange, _, mut private_rx) = PaperExchange::new(config).expect("valid config");
     exchange
         .inject_orderbook(OrderbookSnapshot {
             instrument_id: InstrumentId::new("BTC-USDT"),
@@ -396,7 +397,7 @@ fn linear_book(ask: &str, bid: &str) -> OrderbookSnapshot {
 
 #[test]
 fn linear_open_buy_locks_usdt_margin_not_btc() {
-    let (mut exchange, _, _) = PaperExchange::new(linear_config());
+    let (mut exchange, _, _) = PaperExchange::new(linear_config()).expect("valid config");
     exchange
         .inject_orderbook(linear_book("50000", "49900"))
         .unwrap();
@@ -425,7 +426,8 @@ fn linear_open_buy_locks_usdt_margin_not_btc() {
 
 #[test]
 fn linear_reduce_only_exit_does_not_need_btc() {
-    let (mut exchange, _, mut private_rx) = PaperExchange::new(linear_config());
+    let (mut exchange, _, mut private_rx) =
+        PaperExchange::new(linear_config()).expect("valid config");
     exchange
         .inject_orderbook(linear_book("50000", "49900"))
         .unwrap();
@@ -474,7 +476,7 @@ fn linear_reduce_only_exit_does_not_need_btc() {
 
 #[test]
 fn linear_reduce_only_cannot_open_a_short() {
-    let (mut exchange, _, _) = PaperExchange::new(linear_config());
+    let (mut exchange, _, _) = PaperExchange::new(linear_config()).expect("valid config");
     let err = exchange
         .place_order(OrderRequest {
             instrument_id: InstrumentId::new("BTC-USDT"),
@@ -491,7 +493,7 @@ fn linear_reduce_only_cannot_open_a_short() {
 
 #[test]
 fn linear_one_way_sell_without_reduce_only_rejected_when_flat() {
-    let (mut exchange, _, _) = PaperExchange::new(linear_config());
+    let (mut exchange, _, _) = PaperExchange::new(linear_config()).expect("valid config");
     let err = exchange
         .place_order(OrderRequest {
             instrument_id: InstrumentId::new("BTC-USDT"),
@@ -508,7 +510,7 @@ fn linear_one_way_sell_without_reduce_only_rejected_when_flat() {
 
 #[test]
 fn reject_next_place_does_not_book_an_order() {
-    let (mut exchange, _, _) = PaperExchange::new(test_config());
+    let (mut exchange, _, _) = PaperExchange::new(test_config()).expect("valid config");
     exchange.reject_next_place("lab_reject".into());
     let err = exchange
         .place_order(OrderRequest {
@@ -539,7 +541,7 @@ fn reject_next_place_does_not_book_an_order() {
 
 #[test]
 fn reset_lab_faults_clears_one_shot_hooks() {
-    let (mut exchange, _, _) = PaperExchange::new(test_config());
+    let (mut exchange, _, _) = PaperExchange::new(test_config()).expect("valid config");
     exchange.suppress_next_place_ack_any();
     exchange.reject_next_place("x".into());
     exchange.duplicate_next_fill();
@@ -560,7 +562,7 @@ fn reset_lab_faults_clears_one_shot_hooks() {
 
 #[test]
 fn stale_book_ages_injected_snapshot() {
-    let (mut exchange, mut market_rx, _) = PaperExchange::new(test_config());
+    let (mut exchange, mut market_rx, _) = PaperExchange::new(test_config()).expect("valid config");
     exchange.set_stale_book_age_secs(3_600);
     exchange
         .inject_orderbook(OrderbookSnapshot {
@@ -613,7 +615,7 @@ fn stale_book_ages_injected_snapshot() {
 
 #[test]
 fn partial_next_fill_leaves_working_remainder() {
-    let (mut exchange, _, _) = PaperExchange::new(linear_config());
+    let (mut exchange, _, _) = PaperExchange::new(linear_config()).expect("valid config");
     exchange
         .inject_orderbook(linear_book("50000", "49900"))
         .unwrap();
@@ -637,7 +639,8 @@ fn partial_next_fill_leaves_working_remainder() {
 
 #[test]
 fn position_before_fill_emits_position_first() {
-    let (mut exchange, _, mut private_rx) = PaperExchange::new(linear_config());
+    let (mut exchange, _, mut private_rx) =
+        PaperExchange::new(linear_config()).expect("valid config");
     exchange
         .inject_orderbook(linear_book("50000", "49900"))
         .unwrap();
@@ -672,7 +675,8 @@ fn position_before_fill_emits_position_first() {
 
 #[test]
 fn emit_ws_position_does_not_change_rest_account() {
-    let (mut exchange, _, mut private_rx) = PaperExchange::new(linear_config());
+    let (mut exchange, _, mut private_rx) =
+        PaperExchange::new(linear_config()).expect("valid config");
     let (_, rest_before) = exchange.get_snapshot_data();
     assert!(rest_before.is_empty());
     exchange.emit_ws_position(decimal("1"), decimal("50000"));
@@ -687,7 +691,7 @@ fn emit_ws_position_does_not_change_rest_account() {
 
 #[test]
 fn drop_next_place_is_consumed_without_booking() {
-    let (mut exchange, _, _) = PaperExchange::new(test_config());
+    let (mut exchange, _, _) = PaperExchange::new(test_config()).expect("valid config");
     exchange.drop_next_place();
     assert!(exchange.take_drop_next_place());
     assert!(!exchange.take_drop_next_place());
@@ -695,7 +699,7 @@ fn drop_next_place_is_consumed_without_booking() {
 
 #[test]
 fn lab_fill_open_partial_then_cancel_remainder() {
-    let (mut exchange, _, _) = PaperExchange::new(linear_config());
+    let (mut exchange, _, _) = PaperExchange::new(linear_config()).expect("valid config");
     exchange
         .inject_orderbook(linear_book("50000", "49900"))
         .unwrap();
@@ -723,7 +727,8 @@ fn lab_fill_open_partial_then_cancel_remainder() {
 
 #[test]
 fn lab_fill_then_duplicate_keeps_working_remainder() {
-    let (mut exchange, _, mut private_rx) = PaperExchange::new(linear_config());
+    let (mut exchange, _, mut private_rx) =
+        PaperExchange::new(linear_config()).expect("valid config");
     exchange
         .inject_orderbook(linear_book("50000", "49900"))
         .unwrap();
@@ -762,7 +767,7 @@ fn lab_fill_then_duplicate_keeps_working_remainder() {
 
 #[test]
 fn lab_fill_open_targets_named_order_not_sibling() {
-    let (mut exchange, _, _) = PaperExchange::new(linear_config());
+    let (mut exchange, _, _) = PaperExchange::new(linear_config()).expect("valid config");
     exchange
         .inject_orderbook(linear_book("50000", "49900"))
         .unwrap();
@@ -800,7 +805,7 @@ fn lab_fill_open_targets_named_order_not_sibling() {
 
 #[test]
 fn spot_sell_fill_consumes_base_inventory() {
-    let (mut exchange, _, _) = PaperExchange::new(test_config());
+    let (mut exchange, _, _) = PaperExchange::new(test_config()).expect("valid config");
     exchange
         .inject_orderbook(OrderbookSnapshot {
             instrument_id: InstrumentId::new("BTC-USDT"),
@@ -872,7 +877,7 @@ fn buy_limit(qty: &str, price: &str) -> OrderRequest {
 fn market_buy_that_would_overspend_does_not_fill_or_mutate_account() {
     let mut config = test_config();
     config.initial_balances[0].amount = decimal("100"); // 100 USDT only
-    let (mut exchange, _, mut private_rx) = PaperExchange::new(config);
+    let (mut exchange, _, mut private_rx) = PaperExchange::new(config).expect("valid config");
     exchange
         .inject_orderbook(book("49900", "50000", "1", 1))
         .unwrap();
@@ -924,7 +929,7 @@ fn market_buy_that_would_overspend_does_not_fill_or_mutate_account() {
 fn unfundable_order_does_not_block_later_orders() {
     let mut config = test_config();
     config.initial_balances[0].amount = decimal("100");
-    let (mut exchange, _, _) = PaperExchange::new(config);
+    let (mut exchange, _, _) = PaperExchange::new(config).expect("valid config");
     exchange
         .place_order(OrderRequest {
             instrument_id: InstrumentId::new("BTC-USDT"),
@@ -1024,7 +1029,7 @@ fn account_linear_fill_is_atomic_when_realized_loss_cannot_be_paid() {
 // ---------- Deterministic ordering / clock ----------
 
 fn run_deterministic_session() -> (Vec<String>, Vec<String>, Vec<String>) {
-    let (mut exchange, _, _) = PaperExchange::new(test_config());
+    let (mut exchange, _, _) = PaperExchange::new(test_config()).expect("valid config");
     exchange.set_deterministic_ids(true);
     exchange.set_now_override(Some(
         chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
@@ -1074,7 +1079,7 @@ fn open_orders_and_cancel_all_follow_placement_order() {
 
 #[test]
 fn open_orders_exclude_filled_and_keep_placement_order() {
-    let (mut exchange, _, _) = PaperExchange::new(test_config());
+    let (mut exchange, _, _) = PaperExchange::new(test_config()).expect("valid config");
     exchange
         .inject_orderbook(book("49900", "50000", "1", 1))
         .unwrap();
@@ -1101,7 +1106,7 @@ fn open_orders_exclude_filled_and_keep_placement_order() {
 
 #[test]
 fn clock_override_stamps_orders() {
-    let (mut exchange, _, _) = PaperExchange::new(test_config());
+    let (mut exchange, _, _) = PaperExchange::new(test_config()).expect("valid config");
     let t = chrono::DateTime::parse_from_rfc3339("2030-05-06T07:08:09Z")
         .unwrap()
         .with_timezone(&Utc);
@@ -1117,7 +1122,7 @@ fn clock_override_stamps_orders() {
 fn trade_history_is_bounded_and_keeps_newest() {
     let mut config = test_config();
     config.max_trade_history = 2;
-    let (mut exchange, _, _) = PaperExchange::new(config);
+    let (mut exchange, _, _) = PaperExchange::new(config).expect("valid config");
     exchange.set_deterministic_ids(true);
     exchange
         .inject_orderbook(book("49900", "50000", "10", 1))
@@ -1133,4 +1138,29 @@ fn trade_history_is_bounded_and_keeps_newest() {
     let last = exchange.get_trades(None, Some(1));
     assert_eq!(last.len(), 1);
     assert_eq!(last[0].order_id, OrderId::from_seq(3));
+}
+
+// ---------- Unsupported fill-model config ----------
+
+#[test]
+fn new_rejects_trade_through_fill_model() {
+    let mut config = test_config();
+    config.fill_model.kind = crate::config::FillModelKind::TradeThrough;
+    let err = PaperExchange::new(config).err().expect("must reject");
+    assert!(err.to_string().contains("trade_through"), "{err}");
+}
+
+#[test]
+fn new_rejects_partial_fills() {
+    let mut config = test_config();
+    config.fill_model.partial_fills = true;
+    let err = PaperExchange::new(config).err().expect("must reject");
+    assert!(err.to_string().contains("partial_fills"), "{err}");
+}
+
+#[test]
+fn new_accepts_scripted_fill_model() {
+    let mut config = test_config();
+    config.fill_model.kind = crate::config::FillModelKind::Scripted;
+    assert!(PaperExchange::new(config).is_ok());
 }

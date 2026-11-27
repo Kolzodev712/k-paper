@@ -9,6 +9,7 @@ use futures_util::SinkExt;
 use paper_exchange_core::config::Config;
 use paper_exchange_core::types::{Balance, Execution, Order, Position};
 use std::str::FromStr;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
@@ -97,6 +98,29 @@ pub struct AppState {
     pub snapshot_tx: mpsc::UnboundedSender<SnapshotRequest>,
     pub rest_query_tx: mpsc::UnboundedSender<RestQuery>,
     pub event_tx: broadcast::Sender<BroadcastEvent>,
+    /// Mount the `/test/*` lab fault routes (`PAPER_LAB_FAULTS=1`). Off by default.
+    pub lab_faults: bool,
+    /// Lab fault: `GET /open_orders` returns 503 while set (`/test/fail_open_orders`).
+    pub fail_open_orders: AtomicBool,
+}
+
+impl AppState {
+    pub fn new(
+        user_command_tx: mpsc::UnboundedSender<Command>,
+        snapshot_tx: mpsc::UnboundedSender<SnapshotRequest>,
+        rest_query_tx: mpsc::UnboundedSender<RestQuery>,
+        event_tx: broadcast::Sender<BroadcastEvent>,
+        lab_faults: bool,
+    ) -> Self {
+        Self {
+            user_command_tx,
+            snapshot_tx,
+            rest_query_tx,
+            event_tx,
+            lab_faults,
+            fail_open_orders: AtomicBool::new(false),
+        }
+    }
 }
 
 /// Optional reply for PlaceOrder: Ok(execution) or Err(error message) so the connection can send Execution or Error.

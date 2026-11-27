@@ -1,2 +1,4 @@
 /target
-.cursor
+.cursor/*
+!.cursor/doctrine/
+!.cursor/doctrine/**

@@ -122,6 +122,7 @@ The checked-in `config/instruments.yaml` includes a `market` section. With **no 
 | `PAPER_EXCHANGE_SEED` | — | RNG seed for dummy OB (overrides YAML `dummy_ob.seed`) |
 | `PAPER_EXCHANGE_HOST` | `127.0.0.1` | Bind host |
 | `PAPER_EXCHANGE_PORT` | `19999` | Bind port (same every run unless overridden) |
+| `PAPER_LAB_FAULTS` | off | `1` or `true` — mount the `/test/*` lab fault endpoints (404 otherwise). Set in Docker via `environment:` if the runner needs them |
 
 Logging: standard `RUST_LOG` / tracing, e.g. `RUST_LOG=paper_exchange_server=debug`.
 
@@ -144,14 +145,16 @@ Loaded once at startup into core `Config`.
 | `kind` | Behavior |
 |--------|----------|
 | `immediate_cross` | Limit buy fills when best ask ≤ limit; limit sell when best bid ≥ limit (default) |
-| `trade_through` | Same family as immediate cross with trade-through semantics in matcher |
+| `trade_through` | **Not implemented** — config load fails with an error |
 | `scripted` | **No** automatic book-cross fills; use scenario injections or manual OB updates |
 
-Other fields: `slippage_bps`, `fee_bps`, `partial_fills` (partial fills not fully exercised in v1).
+Other fields: `slippage_bps`, `fee_bps`, `partial_fills`. `partial_fills: true` is **not implemented** and is rejected at config load (use the `/test/partial_next_fill` lab hook for partial-fill scenarios).
 
 ### Dummy OB (dev)
 
-Under `dummy_ob:`: `instrument_id`, `initial_mid`, `step`, `spread_half`, `levels`, `interval_ms`, `seed`, `trade_probability`, `trade_max_qty`, `tick_size`, `base_qty_per_level`.
+Under `market:` (legacy `dummy_ob:`): `initial_mid` (per instrument), `step_ticks`, `spread_half_ticks`, `levels`, `interval_ms`, `seed`, `trade_probability`, `trade_max_qty`, `base_qty_per_level`.
+
+`step_ticks` (max random-walk move per interval) and `spread_half_ticks` are in **ticks of each instrument** and every emitted price is tick-aligned. Set them globally or per entry under `instruments:`; when omitted they default per instrument to ~20 bps / ~10 bps of `initial_mid`. The old absolute `step` / `spread_half` keys are rejected at startup.
 
 ---
 

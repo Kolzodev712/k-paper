@@ -1,6 +1,8 @@
 //! Server runtime: load YAML config, resolve lab/dev profile from environment.
 
-use crate::market_engine::{default_initial_mid, InstrumentMarketSpec, MarketEngineConfig};
+use crate::market_engine::{
+    default_initial_mid, default_ticks, InstrumentMarketSpec, MarketEngineConfig,
+};
 use crate::scenario::{resolve_scenario, ScenarioLoad};
 use paper_exchange_core::config::{Config, FillModelConfig, InitialBalance};
 use paper_exchange_core::types::Instrument;
@@ -49,10 +51,18 @@ fn default_max_trade_history() -> usize {
 
 #[derive(Debug, Deserialize)]
 struct MarketFile {
-    #[serde(default = "default_step")]
-    step: f64,
-    #[serde(default = "default_spread_half")]
-    spread_half: f64,
+    /// Max random-walk move per interval, in ticks of each instrument. When absent, derived
+    /// per instrument as ~20 bps of its initial mid.
+    #[serde(default)]
+    step_ticks: Option<u32>,
+    /// Half the quoted spread, in ticks. When absent, derived as ~10 bps of the initial mid.
+    #[serde(default)]
+    spread_half_ticks: Option<u32>,
+    /// Removed absolute-price keys; present only so they can be rejected with a clear error.
+    #[serde(default)]
+    step: Option<f64>,
+    #[serde(default)]
+    spread_half: Option<f64>,
     #[serde(default = "default_levels")]
     levels: usize,
     #[serde(default = "default_base_qty")]
@@ -75,14 +85,12 @@ struct MarketInstrumentFile {
     id: String,
     #[serde(default)]
     initial_mid: Option<f64>,
+    #[serde(default)]
+    step_ticks: Option<u32>,
+    #[serde(default)]
+    spread_half_ticks: Option<u32>,
 }
 
-fn default_step() -> f64 {
-    100.0
-}
-fn default_spread_half() -> f64 {
-    50.0
-}
 fn default_levels() -> usize {
     5
 }
@@ -107,6 +115,13 @@ pub struct ServerSettings {
     pub scenario: Option<ScenarioLoad>,
     /// Delay between static scenario inject events (ms).
     pub scenario_interval_ms: u64,
+    /// Mount the `/test/*` lab fault routes (`PAPER_LAB_FAULTS=1`).
+    pub lab_faults: bool,
+}
+
+/// `PAPER_LAB_FAULTS=1` (or `true`) exposes the `/test/*` fault-injection endpoints.
+pub fn lab_faults_enabled() -> bool {
+    std::env::var("PAPER_LAB_FAULTS").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
 }
 
 fn resolve_config_path() -> PathBuf {
@@ -135,6 +150,7 @@ pub fn load_settings() -> Result<ServerSettings, Box<dyn std::error::Error + Sen
         max_trade_history: file.max_trade_history,
         linear: file.linear,
     };
+    exchange_config.validate()?;
 
     let scenario_spec = std::env::var("PAPER_EXCHANGE_SCENARIO")
         .ok()
@@ -164,7 +180,7 @@ pub fn load_settings() -> Result<ServerSettings, Box<dyn std::error::Error + Sen
         &exchange_config.instruments,
         market_file,
         env_seed,
-    );
+    )?;
 
     Ok(ServerSettings {
         exchange_config,
@@ -172,6 +188,7 @@ pub fn load_settings() -> Result<ServerSettings, Box<dyn std::error::Error + Sen
         market_engine,
         scenario,
         scenario_interval_ms,
+        lab_faults: lab_faults_enabled(),
     })
 }
 
@@ -207,7 +224,7 @@ fn build_market_engine(
     instruments: &[Instrument],
     market_file: Option<MarketFile>,
     env_seed: Option<u64>,
-) -> Option<MarketEngineConfig> {
+) -> Result<Option<MarketEngineConfig>, Box<dyn std::error::Error + Send + Sync>> {
     let force_dummy = std::env::var("PAPER_EXCHANGE_DUMMY_OB")
         .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
 
@@ -215,19 +232,21 @@ fn build_market_engine(
     let static_only = matches!(scenario, Some(ScenarioLoad::Static(_)));
 
     if static_only && !force_dummy {
-        return None;
+        return Ok(None);
     }
 
     let enable =
         overlay || force_dummy || matches!(profile, RuntimeProfile::Dev) || market_file.is_some();
 
     if !enable {
-        return None;
+        return Ok(None);
     }
 
     let mf = market_file.unwrap_or_else(|| MarketFile {
-        step: default_step(),
-        spread_half: default_spread_half(),
+        step_ticks: None,
+        spread_half_ticks: None,
+        step: None,
+        spread_half: None,
         levels: default_levels(),
         base_qty_per_level: default_base_qty(),
         interval_ms: default_interval_ms(),
@@ -237,44 +256,50 @@ fn build_market_engine(
         instruments: vec![],
     });
 
-    let mid_overrides: std::collections::HashMap<String, f64> = mf
-        .instruments
-        .iter()
-        .map(|i| {
-            (
-                i.id.clone(),
-                i.initial_mid.unwrap_or_else(|| default_initial_mid(&i.id)),
-            )
-        })
-        .collect();
+    if mf.step.is_some() || mf.spread_half.is_some() {
+        return Err(
+            "market `step` / `spread_half` were absolute prices and are no longer \
+             supported; use `step_ticks` / `spread_half_ticks` (in instrument ticks)"
+                .into(),
+        );
+    }
+
+    let overrides: std::collections::HashMap<&str, &MarketInstrumentFile> =
+        mf.instruments.iter().map(|i| (i.id.as_str(), i)).collect();
 
     let specs: Vec<InstrumentMarketSpec> = instruments
         .iter()
         .map(|inst| {
-            let id = inst.id.0.clone();
-            let initial = mid_overrides
-                .get(&id)
-                .copied()
-                .unwrap_or_else(|| default_initial_mid(&id));
+            let ov = overrides.get(inst.id.0.as_str());
+            let initial_mid = ov
+                .and_then(|o| o.initial_mid)
+                .unwrap_or_else(|| default_initial_mid(&inst.id.0));
+            let (derived_step, derived_spread) = default_ticks(initial_mid, &inst.tick_size);
             InstrumentMarketSpec {
                 instrument_id: inst.id.clone(),
-                initial_mid: initial,
+                initial_mid,
                 tick_size: inst.tick_size,
+                step_ticks: ov
+                    .and_then(|o| o.step_ticks)
+                    .or(mf.step_ticks)
+                    .unwrap_or(derived_step),
+                spread_half_ticks: ov
+                    .and_then(|o| o.spread_half_ticks)
+                    .or(mf.spread_half_ticks)
+                    .unwrap_or(derived_spread),
             }
         })
         .collect();
 
-    Some(MarketEngineConfig {
+    Ok(Some(MarketEngineConfig {
         instruments: specs,
-        step: mf.step,
-        spread_half: mf.spread_half,
         levels: mf.levels,
         base_qty_per_level: mf.base_qty_per_level,
         interval_ms: mf.interval_ms,
         seed: env_seed.or(mf.seed),
         trade_probability: mf.trade_probability,
         trade_max_qty: mf.trade_max_qty,
-    })
+    }))
 }
 
 pub fn log_startup(settings: &ServerSettings, bound: std::net::SocketAddr) {
@@ -295,6 +320,9 @@ pub fn log_startup(settings: &ServerSettings, bound: std::net::SocketAddr) {
         settings.exchange_config.fill_model.kind,
         settings.exchange_config.max_trade_history
     );
+    if settings.lab_faults {
+        tracing::warn!("PAPER_LAB_FAULTS enabled: /test/* fault-injection routes are mounted");
+    }
     tracing::info!("Paper exchange URL: ws://{}/ws/trade", bound);
     tracing::info!("REST: http://{}/balances", bound);
 }

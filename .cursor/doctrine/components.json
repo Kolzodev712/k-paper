@@ -1,0 +1,29 @@
+{
+  "components": [
+    {
+      "id": "paper-core",
+      "patterns": ["crates/paper-exchange-core/**"],
+      "required_project_files": [
+        ".cursor/doctrine/objectives.md",
+        ".cursor/doctrine/invariants.md",
+        ".cursor/doctrine/workload.md"
+      ],
+      "required_doctrine_refs": [
+        ".cursor/skills/engineering-doctrine/decision/algorithm-selection.md",
+        ".cursor/skills/engineering-doctrine/decision/evidence.md"
+      ]
+    },
+    {
+      "id": "paper-server",
+      "patterns": ["crates/paper-exchange-server/**"],
+      "required_project_files": [
+        ".cursor/doctrine/objectives.md",
+        ".cursor/doctrine/invariants.md"
+      ],
+      "required_doctrine_refs": [
+        ".cursor/skills/engineering-doctrine/decision/concurrency.md",
+        ".cursor/skills/engineering-doctrine/decision/io.md"
+      ]
+    }
+  ]
+}

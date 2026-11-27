@@ -29,7 +29,14 @@ pub async fn run_core_loop(
     mut rest_query_rx: tokio_mpsc::UnboundedReceiver<RestQuery>,
     event_tx: broadcast::Sender<BroadcastEvent>,
 ) {
-    let (mut exchange, mut market_rx, mut private_rx) = PaperExchange::new(config);
+    let (mut exchange, mut market_rx, mut private_rx) = match PaperExchange::new(config) {
+        Ok(parts) => parts,
+        Err(e) => {
+            // `serve` validates first; this guards direct callers of `spawn_core_task`.
+            tracing::error!("core loop not started: invalid exchange config: {e}");
+            return;
+        }
+    };
 
     loop {
         // Same order as original: drain exchange outputs first so broadcasts go out immediately.
@@ -372,7 +379,8 @@ mod tests {
     /// Unrelated private events queued ahead of the place ACK must not consume the reply.
     #[test]
     fn place_reply_survives_unrelated_leading_private_events() {
-        let (mut exchange, _market_rx, mut private_rx) = PaperExchange::new(config());
+        let (mut exchange, _market_rx, mut private_rx) =
+            PaperExchange::new(config()).expect("valid config");
         exchange.emit_account_snapshot(); // Balance events now precede the ACK in `private_rx`.
         let (event_tx, _event_rx) = broadcast::channel(64);
         let (reply_tx, mut reply_rx) = oneshot::channel();

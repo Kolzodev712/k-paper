@@ -29,8 +29,8 @@ max_trade_history: 10000
 market:
   interval_ms: 500
   seed: null
-  step: 100
-  spread_half: 50
+  # step_ticks / spread_half_ticks are in instrument ticks. Omitted: ~20 / ~10 bps of the
+  # initial mid per instrument. Override per instrument under `instruments:` if needed.
   levels: 5
   trade_probability: 0.2
   instruments:

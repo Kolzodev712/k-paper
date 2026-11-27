@@ -64,7 +64,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         linear: None,
     };
 
-    let (mut exchange, mut market_rx, mut private_rx) = PaperExchange::new(config);
+    let (mut exchange, mut market_rx, mut private_rx) =
+        PaperExchange::new(config).expect("valid config");
 
     let path = std::env::args()
         .nth(1)

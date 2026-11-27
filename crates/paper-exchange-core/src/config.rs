@@ -1,6 +1,7 @@
 //! Configuration: instruments, initial balances, fill model params.
 //! No file I/O in core; callers pass parsed Config.
 
+use crate::error::ExchangeError;
 use crate::linear::LinearContract;
 use crate::types::{Asset, Instrument};
 use rust_decimal::Decimal;
@@ -54,6 +55,36 @@ pub struct Config {
 
 fn default_max_trade_history() -> usize {
     10_000
+}
+
+impl FillModelConfig {
+    /// Reject config surface that is accepted by serde but not implemented by matching.
+    ///
+    /// `trade_through` and `partial_fills` are reserved names; silently running
+    /// `immediate_cross` instead would make a lab run lie about what it simulated.
+    pub fn validate(&self) -> Result<(), ExchangeError> {
+        if matches!(self.kind, FillModelKind::TradeThrough) {
+            return Err(ExchangeError::Validation(
+                "fill_model.kind `trade_through` is not implemented; use `immediate_cross` or `scripted`"
+                    .to_string(),
+            ));
+        }
+        if self.partial_fills {
+            return Err(ExchangeError::Validation(
+                "fill_model.partial_fills is not implemented; set `partial_fills: false`"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Config {
+    /// Check that the config only uses implemented features. Called by `PaperExchange::new`
+    /// and by the server when loading YAML.
+    pub fn validate(&self) -> Result<(), ExchangeError> {
+        self.fill_model.validate()
+    }
 }
 
 impl Default for Config {

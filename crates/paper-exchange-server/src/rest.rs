@@ -8,11 +8,9 @@ use paper_exchange_core::types::{Balance, Execution, Order, OrderStatus, Side};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::sync::oneshot;
-
-static FAIL_OPEN_ORDERS: AtomicBool = AtomicBool::new(false);
 
 pub async fn get_balances(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
@@ -81,7 +79,7 @@ pub async fn get_open_orders(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     Query(q): Query<OpenOrdersQuery>,
 ) -> Result<Json<Vec<OpenOrderDto>>, StatusCode> {
-    if let Some(status) = open_orders_fault_status() {
+    if let Some(status) = open_orders_fault_status(&state) {
         tracing::warn!("lab fail_open_orders: GET /open_orders returning 503");
         return Err(status);
     }
@@ -347,7 +345,7 @@ pub async fn post_reset_lab_faults(
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
     rx.await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    FAIL_OPEN_ORDERS.store(false, Ordering::SeqCst);
+    state.fail_open_orders.store(false, Ordering::SeqCst);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -526,13 +524,15 @@ pub async fn post_lab_fill_open(
     }
 }
 
-pub async fn post_fail_open_orders() -> Result<StatusCode, StatusCode> {
-    FAIL_OPEN_ORDERS.store(true, Ordering::SeqCst);
+pub async fn post_fail_open_orders(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> Result<StatusCode, StatusCode> {
+    state.fail_open_orders.store(true, Ordering::SeqCst);
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn open_orders_fault_status() -> Option<StatusCode> {
-    if FAIL_OPEN_ORDERS.load(Ordering::SeqCst) {
+fn open_orders_fault_status(state: &AppState) -> Option<StatusCode> {
+    if state.fail_open_orders.load(Ordering::SeqCst) {
         Some(StatusCode::SERVICE_UNAVAILABLE)
     } else {
         None
@@ -542,18 +542,40 @@ fn open_orders_fault_status() -> Option<StatusCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::{broadcast, mpsc};
+
+    fn test_state() -> Arc<AppState> {
+        let (user_tx, _user_rx) = mpsc::unbounded_channel();
+        let (snap_tx, _snap_rx) = mpsc::unbounded_channel();
+        let (rest_tx, _rest_rx) = mpsc::unbounded_channel();
+        let (event_tx, _) = broadcast::channel(4);
+        Arc::new(AppState::new(user_tx, snap_tx, rest_tx, event_tx, true))
+    }
 
     #[tokio::test]
     async fn fail_open_orders_returns_503_until_reset() {
-        FAIL_OPEN_ORDERS.store(false, Ordering::SeqCst);
-        assert_eq!(open_orders_fault_status(), None);
-        let armed = post_fail_open_orders().await.expect("arm");
+        let state = test_state();
+        assert_eq!(open_orders_fault_status(&state), None);
+        let armed = post_fail_open_orders(axum::extract::State(state.clone()))
+            .await
+            .expect("arm");
         assert_eq!(armed, StatusCode::NO_CONTENT);
         assert_eq!(
-            open_orders_fault_status(),
+            open_orders_fault_status(&state),
             Some(StatusCode::SERVICE_UNAVAILABLE)
         );
-        FAIL_OPEN_ORDERS.store(false, Ordering::SeqCst);
-        assert_eq!(open_orders_fault_status(), None);
+        state.fail_open_orders.store(false, Ordering::SeqCst);
+        assert_eq!(open_orders_fault_status(&state), None);
+    }
+
+    #[tokio::test]
+    async fn fail_open_orders_is_per_state() {
+        let a = test_state();
+        let b = test_state();
+        post_fail_open_orders(axum::extract::State(a.clone()))
+            .await
+            .expect("arm");
+        assert!(open_orders_fault_status(&a).is_some());
+        assert_eq!(open_orders_fault_status(&b), None);
     }
 }

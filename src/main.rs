@@ -5,5 +5,8 @@
 use paper_exchange_server::run;
 
 fn main() {
-    run();
+    if let Err(e) = run() {
+        eprintln!("paper exchange failed: {e}");
+        std::process::exit(1);
+    }
 }

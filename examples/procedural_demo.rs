@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         linear: None,
     };
 
-    let (mut exchange, _market_rx, _private_rx) = PaperExchange::new(config);
+    let (mut exchange, _market_rx, _private_rx) = PaperExchange::new(config).expect("valid config");
 
     let mut rng = rand::thread_rng();
     let mut mid = 50000.0_f64;

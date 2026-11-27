@@ -14,6 +14,8 @@ services:
       PAPER_EXCHANGE_HOST: "0.0.0.0"
       PAPER_EXCHANGE_PORT: "19999"
       PAPER_EXCHANGE_DUMMY_OB: "1"
+      # Uncomment to mount the /test/* lab fault endpoints (off by default).
+      # PAPER_LAB_FAULTS: "1"
     restart: unless-stopped
     # deploy.resources only apply in Swarm; if you see exit 137 (OOM), increase Docker memory
     deploy:

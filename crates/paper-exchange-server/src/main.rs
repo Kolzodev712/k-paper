@@ -2,5 +2,8 @@
 //! Delegates to library run() so root binary and this binary share the same logic.
 
 fn main() {
-    paper_exchange_server::run();
+    if let Err(e) = paper_exchange_server::run() {
+        eprintln!("paper exchange failed: {e}");
+        std::process::exit(1);
+    }
 }

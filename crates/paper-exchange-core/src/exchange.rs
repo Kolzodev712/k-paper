@@ -54,14 +54,24 @@ impl PaperExchange {
     /// positions by key). `OrderId`/`TradeId` stay random UUIDs and timestamps use the wall
     /// clock unless [`set_deterministic_ids`](Self::set_deterministic_ids) /
     /// [`set_now_override`](Self::set_now_override) are used.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExchangeError::Validation`] if the config selects an unimplemented fill model
+    /// (`trade_through`) or enables `partial_fills`; see [`Config::validate`].
+    #[allow(clippy::type_complexity)] // the (exchange, market_rx, private_rx) triple is the API
     pub fn new(
         config: impl Into<Arc<Config>>,
-    ) -> (
-        Self,
-        mpsc::UnboundedReceiver<StreamEvent<MarketDataEvent>>,
-        mpsc::UnboundedReceiver<StreamEvent<PrivateEvent>>,
-    ) {
+    ) -> Result<
+        (
+            Self,
+            mpsc::UnboundedReceiver<StreamEvent<MarketDataEvent>>,
+            mpsc::UnboundedReceiver<StreamEvent<PrivateEvent>>,
+        ),
+        ExchangeError,
+    > {
         let config: Arc<Config> = config.into();
+        config.validate()?;
         let (market_tx, market_rx) = mpsc::unbounded_channel();
         let (private_tx, private_rx) = mpsc::unbounded_channel();
         // orderbook entries added below
@@ -93,7 +103,7 @@ impl PaperExchange {
             deterministic_ids: false,
             next_trade_seq: 0,
         };
-        (exchange, market_rx, private_rx)
+        Ok((exchange, market_rx, private_rx))
     }
 
     fn now(&self) -> chrono::DateTime<Utc> {
