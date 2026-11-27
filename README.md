@@ -55,7 +55,7 @@ Command replies are sent on the **same WebSocket** that submitted the command (`
 
 ```bash
 # Server must be running (dev profile)
-./examples/external_http_client.sh
+cargo run --example external_http_client
 ```
 
 ## Scenarios and faults
@@ -72,7 +72,7 @@ Command replies are sent on the **same WebSocket** that submitted the command (`
 | --- | --- |
 | Scripted scenario (in-process) | `cargo run --example scripted_scenario` |
 | Procedural OB demo | `cargo run --example procedural_demo` |
-| REST + WS smoke | `./examples/external_http_client.sh` |
+| REST + WS smoke | `cargo run --example external_http_client` |
 
 ## Limitations
 
