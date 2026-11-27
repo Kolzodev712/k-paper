@@ -2,7 +2,17 @@
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-11-27
+
 ### Changed
 
-- Relicensed under Apache License 2.0 (`NOTICE`: T.L.P. Arc Entertainment Ltd.).
-- Docker image and compose include/mount `config/` with pinned Rust `1.98.1`.
+- Standalone Compose publishes `127.0.0.1:19999` by default.
+- Public README repositioned for independent use; fault docs point at DEV-GUIDE.
+
+### Added
+
+- `cargo run --example external_http_client` (REST + trade WebSocket; no websocat).
+
+### Fixed
+
+- Procedural/scripted examples surface failed `place_order` instead of ignoring errors.
