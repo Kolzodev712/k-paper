@@ -240,7 +240,7 @@ Bootstrap pattern for a bot:
 
 ## Docker
 
-`docker-compose.yml` sets `PAPER_EXCHANGE_DUMMY_OB=1` for dev-style feeds. Mount your own `config/instruments.yaml` and set `PAPER_EXCHANGE_CONFIG` if needed.
+`docker-compose.yml` sets `PAPER_EXCHANGE_DUMMY_OB=1` for dev-style feeds, copies/mounts `config/` into the image at `/app/config`, and sets `PAPER_EXCHANGE_CONFIG=/app/config/instruments.yaml`. Override the mount or env var to use a different instruments file.
 
 ---
 

@@ -12,7 +12,7 @@ name = "k-paper"
 version = "0.1.0"
 edition = "2021"
 description = "Standalone paper exchange — main system binary."
-license = "UNLICENSED"
+license = "Apache-2.0"
 
 [[bin]]
 name = "k-paper"

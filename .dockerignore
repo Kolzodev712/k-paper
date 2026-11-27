@@ -6,5 +6,4 @@ target
 docs
 proposals
 justfile
-config
 examples

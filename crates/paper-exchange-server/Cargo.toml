@@ -3,7 +3,7 @@ name = "paper-exchange-server"
 version = "0.1.0"
 edition = "2021"
 description = "Server wrapping paper-exchange-core: WebSocket (or gRPC), sessions, wire format."
-license = "UNLICENSED"
+license = "Apache-2.0"
 
 [[bin]]
 name = "paper-exchange-server"

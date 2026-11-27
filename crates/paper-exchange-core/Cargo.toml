@@ -3,7 +3,7 @@ name = "paper-exchange-core"
 version = "0.1.0"
 edition = "2021"
 description = "Core logic for the standalone paper exchange: orderbook, matching, account, streams."
-license = "UNLICENSED"
+license = "Apache-2.0"
 
 [dependencies]
 rust_decimal = { version = "1.33", features = ["maths"] }

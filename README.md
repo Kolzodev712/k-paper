@@ -2,7 +2,8 @@
 
 Standalone paper exchange: orderbook, order lifecycle, matching, account state, and streams. Usable as an in-process library or through its HTTP/WebSocket server.
 
-- **License:** Proprietary. See [LICENSE](LICENSE).
+- **License:** Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+- **Copyright:** © 2025–2026 T.L.P. Arc Entertainment Ltd.
 - **Design:** [proposals/paper-exchange-v1.md](proposals/paper-exchange-v1.md) — preliminary design plan (v1); implement from there.
 - **Layout:** Workspace with `paper-exchange-core` (library), `paper-exchange-scenarios`, and `paper-exchange-server`.
 
@@ -10,7 +11,7 @@ Standalone paper exchange: orderbook, order lifecycle, matching, account state, 
 
 The core, HTTP/WebSocket server, market scenarios, **one-way USDT-linear BTCUSDT fixtures**, client-id lookup, and lab fault hooks (including `fail_open_orders`) exist. This is a controlled laboratory, not Bybit API parity and not production/mainnet. Paper process restart still loses the in-memory account.
 
-Increment status and next gates live in the [trading_system progression doc](https://github.com/Kolzodev712/trading_system/blob/master/docs/PROGRESSION.md). This repo's increment notes: [docs/PROP_TRADING_INTEGRATION_GUIDE.md](docs/PROP_TRADING_INTEGRATION_GUIDE.md). Spot/levels smoke (`sample_config/k-paper` in the runner) is not the linear Candidate #2 Paper lab.
+Increment status and next gates live in the [trading_system progression doc](https://github.com/Kolzodev712/trading_system/blob/main/docs/PROGRESSION.md). This repo's increment notes: [docs/PROP_TRADING_INTEGRATION_GUIDE.md](docs/PROP_TRADING_INTEGRATION_GUIDE.md). Spot/levels smoke (`sample_config/k-paper` in the runner) is not the linear Candidate #2 Paper lab.
 
 ## Build and run
 
