@@ -256,6 +256,7 @@ cargo test --all -- --test-threads=1
 |---------|---------|
 | Scripted scenario (in-process) | `cargo run --example scripted_scenario` |
 | Procedural OB demo | `cargo run --example procedural_demo` |
+| External REST + WS client | `./examples/external_http_client.sh` (needs `websocat`) |
 
 ---
 

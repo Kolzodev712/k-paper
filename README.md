@@ -1,37 +1,86 @@
 # k-paper
 
-Standalone paper exchange: orderbook, order lifecycle, matching, account state, and streams. Usable as an in-process library or through its HTTP/WebSocket server.
+Standalone **paper exchange**: synthetic or scripted market data, order lifecycle, simple matching, single in-memory account, HTTP + WebSocket APIs. Use it as a library, as the `k-paper` server process, or in Docker — **without** the `trading_system` repo.
 
 - **License:** Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 - **Copyright:** © 2025–2026 T.L.P. Arc Entertainment Ltd.
-- **Design:** [proposals/paper-exchange-v1.md](proposals/paper-exchange-v1.md) — preliminary design plan (v1); implement from there.
-- **Layout:** Workspace with `paper-exchange-core` (library), `paper-exchange-scenarios`, and `paper-exchange-server`.
+- **Design:** [proposals/paper-exchange-v1.md](proposals/paper-exchange-v1.md)
+- **Crates:** `paper-exchange-core`, `paper-exchange-server`, `paper-exchange-scenarios`; root package builds the `k-paper` binary.
 
-## Current scope
+## Boundaries
 
-The core, HTTP/WebSocket server, market scenarios, **one-way USDT-linear BTCUSDT fixtures**, client-id lookup, and lab fault hooks (including `fail_open_orders`) exist. This is a controlled laboratory, not Bybit API parity and not production/mainnet. Paper process restart still loses the in-memory account.
+Controlled laboratory venue — **not** Bybit API parity, **not** production/mainnet. Restarting the server **drops** the in-memory account. Increment status: [docs/PROP_TRADING_INTEGRATION_GUIDE.md](docs/PROP_TRADING_INTEGRATION_GUIDE.md) and [trading_system PROGRESSION](https://github.com/Kolzodev712/trading_system/blob/main/docs/PROGRESSION.md).
 
-Increment status and next gates live in the [trading_system progression doc](https://github.com/Kolzodev712/trading_system/blob/main/docs/PROGRESSION.md). This repo's increment notes: [docs/PROP_TRADING_INTEGRATION_GUIDE.md](docs/PROP_TRADING_INTEGRATION_GUIDE.md). Spot/levels smoke (`sample_config/k-paper` in the runner) is not the linear Candidate #2 Paper lab.
-
-## Build and run
+## Install and run (library / binary)
 
 ```bash
 cargo build
-cargo run              # run main system binary (k-paper)
-cargo run -p paper-exchange-server   # same, via server crate
+cargo run                    # k-paper server (delegates to paper-exchange-server)
+cargo run -p paper-exchange-server
 cargo test -p paper-exchange-core
 cargo test --all -- --test-threads=1
 ```
 
-The main executable is **k-paper** at the repo root (`src/main.rs`). It delegates to the server; `cargo run` starts the paper exchange.
+**Dev profile** (synthetic orderbook, loopback):
 
-**Documentation:** [docs/DEV-GUIDE.md](docs/DEV-GUIDE.md) — how to run (lab vs dev), configure YAML, scenarios, REST/WS integration, and pitfalls. Increment notes: [prop-trading integration guide](docs/PROP_TRADING_INTEGRATION_GUIDE.md). API message schemas: [docs/CLIENT-INSTRUCTIONS.md](docs/CLIENT-INSTRUCTIONS.md), [docs/API-EXECUTION.md](docs/API-EXECUTION.md), [docs/API-MARKET-DATA.md](docs/API-MARKET-DATA.md).
+```bash
+export PAPER_EXCHANGE_PROFILE=dev
+export PAPER_EXCHANGE_PORT=19999   # default
+cargo run
+# Market: ws://127.0.0.1:19999/ws/market
+# Trade:  ws://127.0.0.1:19999/ws/trade
+```
 
-## Crates
+Full run modes, YAML, and scenarios: **[docs/DEV-GUIDE.md](docs/DEV-GUIDE.md)**.
 
-| Crate | Role |
-|-------|------|
-| **k-paper** (root) | Main system binary; runs the server. |
-| `paper-exchange-core` | Orderbook, orders, fill model, account, streams; no I/O beyond channels. |
-| `paper-exchange-server` | Wraps core; HTTP/WebSocket server and sessions. |
-| `paper-exchange-scenarios` | Timed market-price overlays and presets. |
+## Docker (loopback)
+
+```bash
+docker compose up --build
+```
+
+Image listens on **`127.0.0.1:19999`** (see [docker-compose.yml](docker-compose.yml), [Dockerfile](Dockerfile)): `PAPER_EXCHANGE_DUMMY_OB=1`, config under `/app/config`. Override mount/env for custom `instruments.yaml`.
+
+## HTTP / WebSocket
+
+| Surface | Doc |
+| --- | --- |
+| Endpoint map | [docs/CLIENT-INSTRUCTIONS.md](docs/CLIENT-INSTRUCTIONS.md) |
+| Trading WS | [docs/API-EXECUTION.md](docs/API-EXECUTION.md) |
+| Market WS | [docs/API-MARKET-DATA.md](docs/API-MARKET-DATA.md) |
+
+Command replies are sent on the **same WebSocket** that submitted the command (`/ws/trade`). REST (`/balances`, `/open_orders`, `/exchange_info`, …) is for bootstrap and reconciliation.
+
+**Minimal external client (no trading_system):**
+
+```bash
+# Server must be running (dev profile)
+./examples/external_http_client.sh
+```
+
+## Scenarios and faults
+
+- **Timed overlays:** `PAPER_EXCHANGE_SCENARIO` presets — table in [docs/DEV-GUIDE.md](docs/DEV-GUIDE.md).
+- **Static JSON:** `config/scenario_01.json`; `cargo run --example scripted_scenario`.
+- **Lab faults** (`fail_open_orders`, dropped acks, partial fills, …): HTTP hooks on the server — **documented in [docs/DEV-GUIDE.md](docs/DEV-GUIDE.md)** and cross-repo increment notes; do not duplicate fault semantics here.
+
+**Reset faults:** `POST /test/reset_lab_faults` (see DEV-GUIDE / PROP integration guide).
+
+## Examples
+
+| Example | Command |
+| --- | --- |
+| Scripted scenario (in-process) | `cargo run --example scripted_scenario` |
+| Procedural OB demo | `cargo run --example procedural_demo` |
+| REST + WS smoke | `./examples/external_http_client.sh` |
+
+## Limitations
+
+- Single paper account; user orders do not form a multi-party CLOB.
+- Matching uses the **injected** book, not full central-limit semantics.
+- Linear USDT perp semantics require explicit `instrument_type` + `linear` fixture in YAML.
+- No durable ledger across process restart.
+
+## Integrated lab
+
+For runner + UI + k-paper together, use [trading-system-showcase/lab](../trading-system-showcase/lab/README.md) (sibling checkout).

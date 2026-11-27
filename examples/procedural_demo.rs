@@ -67,7 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         exchange.inject_orderbook(snapshot)?;
     }
 
-    let _ = exchange.place_order(OrderRequest {
+    match exchange.place_order(OrderRequest {
         instrument_id: instrument_id.clone(),
         side: Side::Buy,
         order_type: OrderType::Limit,
@@ -75,8 +75,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         limit_price: Some(Decimal::try_from(mid + 200.0).unwrap()),
         client_order_id: None,
         reduce_only: false,
-    });
+    }) {
+        Ok(order) => {
+            eprintln!("Procedural demo: placed limit buy -> {:?}", order.status);
+        }
+        Err(e) => {
+            eprintln!("place_order failed: {e}");
+            std::process::exit(1);
+        }
+    }
 
-    eprintln!("Procedural demo: injected 20 random-walk snapshots and placed one limit buy.");
+    eprintln!("Procedural demo: injected 20 random-walk snapshots.");
     Ok(())
 }

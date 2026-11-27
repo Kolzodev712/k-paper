@@ -8,15 +8,16 @@ services:
   paper-exchange:
     build: .
     ports:
-      # Lab-only: published on all interfaces by Compose default; prefer host firewall
-      # or bind via PAPER_EXCHANGE_HOST for local-only use.
-      - "19999:19999"
+      # Default: loopback only. Override deliberately if you need LAN access.
+      - "127.0.0.1:19999:19999"
     environment:
+      # Listen on all container interfaces; host publish stays loopback above.
       PAPER_EXCHANGE_HOST: "0.0.0.0"
       PAPER_EXCHANGE_PORT: "19999"
       PAPER_EXCHANGE_DUMMY_OB: "1"
       PAPER_EXCHANGE_CONFIG: "/app/config/instruments.yaml"
       # Uncomment to mount the /test/* lab fault endpoints (off by default).
+      # Laboratory Compose sets PAPER_LAB_FAULTS=1 explicitly; standalone stays off.
       # PAPER_LAB_FAULTS: "1"
     volumes:
       - ./config:/app/config:ro

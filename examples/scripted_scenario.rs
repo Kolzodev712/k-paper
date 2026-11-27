@@ -148,8 +148,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     client_order_id: None,
                     reduce_only: false,
                 };
-                if let Ok(order) = exchange.place_order(req) {
-                    eprintln!("  placed order {} -> {:?}", order.order_id, order.status);
+                match exchange.place_order(req) {
+                    Ok(order) => {
+                        eprintln!("  placed order {} -> {:?}", order.order_id, order.status);
+                    }
+                    Err(e) => {
+                        eprintln!("  place_order failed: {e}");
+                        std::process::exit(1);
+                    }
                 }
             }
             _ => {}
