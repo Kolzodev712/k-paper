@@ -36,8 +36,9 @@ Describe the problem, approach, tests run, and any API/behavior changes.
 
 ## Reporting problems
 
-- Issues: GitHub Issues (templates when available).
-- Security: [SECURITY.md](SECURITY.md).
+- Issues: GitHub Issues (templates when available). Open contributions: https://github.com/Kolzodev712/k-paper/labels/good%20first%20issue
+- Security: [SECURITY.md](SECURITY.md) — GitHub private vulnerability reporting.
+- Conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 ## License
 

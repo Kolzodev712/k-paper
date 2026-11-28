@@ -87,4 +87,4 @@ For runner + UI + k-paper together, use [trading-system-showcase/lab](https://gi
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Issues welcome; security via [SECURITY.md](SECURITY.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md). Browse [good first issues](https://github.com/Kolzodev712/k-paper/labels/good%20first%20issue) and the ecosystem [ROADMAP](https://github.com/Kolzodev712/trading-system-showcase/blob/main/ROADMAP.md). Security: [SECURITY.md](SECURITY.md). Code of conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
