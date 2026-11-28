@@ -83,4 +83,8 @@ cargo run --example external_http_client
 
 ## Integrated lab
 
-For runner + UI + k-paper together, use [trading-system-showcase/lab](../trading-system-showcase/lab/README.md) (sibling checkout).
+For runner + UI + k-paper together, use [trading-system-showcase/lab](https://github.com/Kolzodev712/trading-system-showcase/tree/main/lab).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Issues welcome; security via [SECURITY.md](SECURITY.md).
